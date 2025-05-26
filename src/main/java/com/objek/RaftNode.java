@@ -1,10 +1,15 @@
+package src.main.java.com.objek;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
-public enum NodeState {LEADER, CANDIDATE, FOLLOWER};
+
+
+
 public class RaftNode {
+    public enum NodeState {LEADER, CANDIDATE, FOLLOWER};
+    public enum CommandType { PING, GET, SET, STRLEN, DEL, APPEND };
     // Configuration constants
     private static final int HEARTBEAT_INTERVAL_MS = 1000;
     private static final int ELECTION_TIMEOUT_MIN_MS = 2000;
@@ -253,7 +258,7 @@ public class RaftNode {
     }
     
     private void applyLogEntry(LogEntry entry) {
-        kvStore.applyLogEntry(entry);
+        applyLogEntry(entry);
         lastApplied++;
         printLog("Applied log entry: " + entry);
     }
@@ -354,6 +359,22 @@ public class RaftNode {
         String timestamp = java.time.LocalTime.now().toString();
         System.out.printf("[%s] [%s] [%s] %s%n", 
                          nodeAddress, timestamp, state, message);
+    }
+
+    public void applyLogEntry(CommandType type, String key, String value) {
+        try {
+            switch (type) {
+                case PING : kvStore.ping();
+                case GET : kvStore.get(key);
+                case SET : kvStore.set(key, value);
+                case STRLEN : kvStore.strLen(key);
+                case DEL : kvStore.del(key);
+                case APPEND : kvStore.append(key, value);
+                default : System.out.println("ERROR: Invalid command");
+            };
+        } catch (Exception e) {
+            System.err.println("ERROR: " + e.getMessage());
+        }
     }
     
     public void shutdown() {

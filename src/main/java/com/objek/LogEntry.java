@@ -1,3 +1,4 @@
+package src.main.java.com.objek;
 public class LogEntry {
     private int term;
     private String command;

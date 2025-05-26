@@ -1,8 +1,8 @@
+package src.main.java.com.objek;
 public class Address {
     private String host;
     private int port ;
 
-    
 
     public Address(){
         this.host = null;
