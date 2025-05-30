@@ -1,12 +1,17 @@
-package src.main.java.com.objek;
-public class LogEntry {
+package raft.entity;
+
+public class Entry {
     private int term;
     private String command;
     private String key;
     private String value;
     // private long timestamp;
+
+    public Entry (){
+        
+    }
     
-    public LogEntry(int term, String command, String key, String value) {
+    public Entry(int term, String command, String key, String value) {
         this.term = term;
         this.command = command;
         this.key = key;

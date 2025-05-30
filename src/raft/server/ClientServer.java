@@ -1,11 +1,7 @@
+package raft.server;
 
+import raft.entity.RaftNode;
 
-
-
-package src.main.java.com.kerja;
-
-
-import  src.main.java.com.objek.RaftNode;
 public class ClientServer {
     private final RaftNode raftNode;
     
@@ -22,3 +18,4 @@ public class ClientServer {
         // TODO: Implement shutdown
     }
 }
+

@@ -1,15 +1,14 @@
-package src.main.java.com.objek;
-public class Address {
+package raft.entity;
+public class Alamat {
     private String host;
     private int port ;
 
-
-    public Address(){
+    public Alamat(){
         this.host = null;
         this.port = 0;
     }
 
-    public Address(String host, int port){
+    public Alamat(String host, int port){
         this.host = host;
         this.port = port;
     }
@@ -18,7 +17,7 @@ public class Address {
         return this.host;
     }
 
-    public void setString(String host){
+    public void setHost(String host){
         this.host = host;
     }
 
@@ -30,21 +29,23 @@ public class Address {
         this.port = port;
     }
 
+
         @Override
     public String toString() {
         return host + ":" + port;
     }
-    
-    @Override
+
+        @Override
     public boolean equals(Object obj) {
         if (this == obj) return true;
         if (obj == null || getClass() != obj.getClass()) return false;
-        Address address = (Address) obj;
-        return port == address.port && host.equals(address.host);
+        Alamat that = (Alamat) obj;
+        return this.port == that.port && this.host.equals(that.host);
     }
-    
-    @Override
+
+        @Override
     public int hashCode() {
-        return host.hashCode() * 31 + port;
-    }
+        return java.util.Objects.hash(host, port);
+}
+
 }

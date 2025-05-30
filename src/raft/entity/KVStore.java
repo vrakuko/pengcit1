@@ -1,4 +1,5 @@
-package src.main.java.com.objek;
+package raft.entity;
+
 import java.util.HashMap;
 import java.util.Map;
 
@@ -12,10 +13,7 @@ public class KVStore{
         // this.cmd = null;
         this.kvStore = new HashMap<>();
     }
-    // public Command(CommandType cmd, String ) {
-    //     this.cmd = cmd;
-    //     this.kvStore = new HashMap<>();
-    // }
+
 
     
     public String ping() {
@@ -27,9 +25,6 @@ public class KVStore{
     }
     
     public void set(String key, String value) {
-        // if (key == null || value == null) {
-        //     return "ERROR: Key and value cannot be null";
-        // }
         kvStore.put(key, value);
        System.out.println("OK");
     }
@@ -45,9 +40,6 @@ public class KVStore{
     }
     
     public void append(String key, String value) {
-        // if (key == null || value == null) {
-        //     return "ERROR: Key and value cannot be null";
-        // }
         String current = get(key);
         kvStore.put(key, current + value);
         System.out.println("OK");

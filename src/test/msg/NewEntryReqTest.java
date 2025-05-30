@@ -1,19 +1,23 @@
-package src.main.java.com.objek;
+package test.msg;
+
 
 import java.util.List;
 
-public class AppendEntriesRequest {
+import raft.entity.Alamat;
+import raft.entity.Entry;
+
+public class NewEntryReqTest {
 
     private int term;
-    private Address to;
-    private Address from;
+    private Alamat to;
+    private Alamat from;
     private int prevLogIdx;
     private int prevLogTerm;
-    private List<LogEntry> entries;
+    private List<Entry> entries;
     private int leaderCommit;
 
-    public AppendEntriesRequest(int term, Address leaderId, int prevLogIndex,
-                                int prevLogTerm, List<LogEntry> entries, int leaderCommit, Address to, Address from) {
+    public NewEntryReq(int term, Alamat leaderId, int prevLogIndex,
+                                int prevLogTerm, List<Entry> entries, int leaderCommit, Alamat to, Alamat from) {
         this.term = term;
         this.to = to;
         this.from = from;
@@ -28,11 +32,11 @@ public class AppendEntriesRequest {
         return term;
     }
 
-    public Address getTo() {
+    public Alamat getTo() {
         return to;
     }
 
-    public Address getFrom() {
+    public Alamat getFrom() {
         return from;
     }
 
@@ -44,7 +48,7 @@ public class AppendEntriesRequest {
         return prevLogTerm;
     }
 
-    public List<LogEntry> getEntries() {
+    public List<Entry> getEntries() {
         return entries;
     }
 
@@ -57,11 +61,11 @@ public class AppendEntriesRequest {
         this.term = term;
     }
 
-    public void setTo(Address to) {
+    public void setTo(Alamat to) {
         this.to = to;
     }
 
-    public void setFrom(Address from) {
+    public void setFrom(Alamat from) {
         this.from = from;
     }
 
@@ -73,7 +77,7 @@ public class AppendEntriesRequest {
         this.prevLogTerm = prevLogTerm;
     }
 
-    public void setEntries(List<LogEntry> entries) {
+    public void setEntries(List<Entry> entries) {
         this.entries = entries;
     }
 
@@ -81,3 +85,4 @@ public class AppendEntriesRequest {
         this.leaderCommit = leaderCommit;
     }
 }
+

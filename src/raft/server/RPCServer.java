@@ -1,8 +1,11 @@
-package src.main.java.com.kerja;
-public class RaftRPCServer {
-    private final RaftNode raftNode;
+package raft.server;
+
+import raft.entity.RaftNode;
+
+public class RPCServer {
+    private RaftNode raftNode;
     
-    public RaftRPCServer(RaftNode raftNode) {
+    public RPCServer(RaftNode raftNode) {
         this.raftNode = raftNode;
     }
     
@@ -15,3 +18,4 @@ public class RaftRPCServer {
         // TODO: Implement shutdown
     }
 }
+
