@@ -6,7 +6,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import raft.msg.*;
+import raft.server.*;
 
 
 public class RaftNode {
@@ -20,11 +26,11 @@ public class RaftNode {
     private final Alamat nodeId; // bisa IP:PORT atau ID unik
     private final List<Alamat> clusterNodes;
 
-    // ====== Raft Core State ======
+    // ====== Raft Core State (Persistent) ======
     private int currentTerm ;
     private Alamat votedFor ;
-
     private  List<Entry> log ;
+
     private int commitIndex ;
     private int lastApplied ;
 
@@ -35,6 +41,7 @@ public class RaftNode {
     private long lastHeartbeatTime;
     private long electionTimeout ;
     private static final long HEARTBEAT_INTERVAL = 150; // ms
+    
 
     // ====== Leader State (Volatile) ======
     private Map<String, Integer> nextIndex = new ConcurrentHashMap<>();
@@ -42,6 +49,14 @@ public class RaftNode {
 
     // ====== Application Layer ======
     private  KVStore kvStore ;
+
+    // ===== Election Specifics =====
+    private AtomicInteger votesReceived;
+    private final Object electionLock = new Object();
+
+    // ==== Concurrency Util =====
+    private volatile boolean running;
+    private ScheduledExecutorService scheduler;
 
     // ====== Constructor ======
     public RaftNode() {
@@ -59,6 +74,15 @@ public class RaftNode {
         this.kvStore = new KVStore();
         
         // Bisa isi dummy log kalau mau
+
+        //Election
+        this.votesReceived = new AtomicInteger(0);
+        this.running = true;
+        this.scheduler = Executors.newSingleThreadScheduledExecutor();
+
+        // Start Lifecycle for the first Node
+        
+        startRaftLifecycle();
     }
 
     public RaftNode(Alamat nodeId, List<Alamat> clusterNodes, int currentTerm, Role role, Alamat votedFor, List<Entry> initialLog, int commitIdx, int  lastApplied, Alamat currentLeader) {
@@ -89,6 +113,9 @@ public class RaftNode {
         }
     }
 
+    private void startRaftLifecycle(){
+        
+    }
 
     // ====== Utility: Election Timeout ======
     private long randomElectionTimeout() {
@@ -135,4 +162,57 @@ public class RaftNode {
     // - becomeLeader / becomeCandidate / becomeFollower
     // - commit log
     // - apply log entries to kvStore
+
+    // Step
+
+    private void step(){
+        if(role == Role.FOLLOWER){
+            if(isElectionTimeout()){
+                System.out.println("");
+                becomeCandidate();
+            }
+        }
+        else if(role == Role.CANDIDATE){
+            if(isElectionTimeout()){
+                
+                startElection();
+            }
+        }
+        else if(role == Role.LEADER){
+            if(System.currentTimeMillis() - lastHeartbeatTime >= HEARTBEAT_INTERVAL){
+                
+                sendHeartbeat();
+                resetHeartbeatTimer();
+            }
+        }
+    }
+
+    // Update Role
+
+    private void becomeFollower(){
+
+    }
+    
+    private void becomeCandidate(){
+
+    }
+
+    private void becomeLeader(){
+
+    }
+
+    // Election
+
+    private void startElection(){
+
+    }
+
+
+    // 
+
+    private void sendHeartbeat(){
+
+    }
+
 }
+
