@@ -9,6 +9,8 @@
 plugins {
     // Apply the application plugin to add support for building a CLI application in Java.
     id 'application'
+    id 'com.google.protobuf' version '0.9.4'
+    id 'io.grpc.java_plugin' version '1.63.0'
 }
 
 repositories {
@@ -24,6 +26,12 @@ dependencies {
 
     // This dependency is used by the application.
     implementation libs.guava
+
+    // Protobuf & gRPC runtime dependencies
+    implementation 'com.google.protobuf:protobuf-java:3.25.1'
+    implementation 'io.grpc:grpc-netty-shaded:1.63.0' // gRPC client/server netty transport
+    implementation 'io.grpc:grpc-protobuf:1.63.0'     // gRPC protobuf serialization
+    implementation 'io.grpc:grpc-stub:1.63.0'         // gRPC client stubs and server implementation
 }
 
 // Apply a specific Java toolchain to ease working on different environments.
