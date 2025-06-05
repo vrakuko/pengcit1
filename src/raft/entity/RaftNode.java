@@ -181,16 +181,15 @@ public class RaftNode {
 
     private void step() {
         synchronized (stateLock) {
-            // Apply committed entries to state machine (Rule for All Servers)
             applyCommittedEntries();
 
             if (role == Role.FOLLOWER) {
-                if (System.currentTimeMillis() - lastHeartbeatTime > electionTimeout) {
+                if (isElectionTimeout()) {
                     System.out.println("[" + nodeId + "] Election timeout. Becoming CANDIDATE. Term: " + currentTerm);
                     becomeCandidate();
                 }
             } else if (role == Role.CANDIDATE) {
-                if (System.currentTimeMillis() - lastHeartbeatTime > electionTimeout) {
+                if (isElectionTimeout()) {
                     System.out.println("[" + nodeId + "] Election timeout again. Starting new election. Term: " + currentTerm);
                     startElection();
                 }

@@ -54,13 +54,13 @@ public class KVStore{
                 append(key, value);
                 return "OK";
             case "del":
-                return del(key); // Returns deleted value
+                return del(key);
             case "get":
-                return get(key); // Returns value
+                return get(key);
             case "strlen":
-                return String.valueOf(strLen(key)); // Returns length as string
+                return String.valueOf(strLen(key));
             case "ping":
-                return ping(); // Returns "PONG"
+                return ping();
             default:
                 return "ERROR: Unknown command";
         }
