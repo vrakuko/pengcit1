@@ -11,15 +11,6 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import raft.NodeAddr;
-import raft.Entry;
-import raft.KVStore;
-import raft.NewVoteReq;
-import raft.NewVoteResp;
-import raft.NewEntryReq;
-import raft.NewEntryResp;
-import raft.RPCClient;  
-
 public class RaftNode {
      public enum Role {
         LEADER,
