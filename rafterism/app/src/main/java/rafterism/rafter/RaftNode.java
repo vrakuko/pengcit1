@@ -1,14 +1,8 @@
-package rafterism.rafter; // Package disesuaikan
 
-// import rafterism.rafter.NodeAddr; // Menggunakan NodeAddr
-// import rafterism.rafter.Entry;     // Menggunakan Entry
-// import rafterism.rafter.KVStore;   // Menggunakan KVStore
-// import rafterism.rafter.msg.NewEntryReq;
-// import rafterism.rafter.msg.NewEntryResp;
-// import rafterism.rafter.msg.  NewVoteReq;
-// import rafterism.rafter.msg.NewVoteResp;
+
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
@@ -17,141 +11,125 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
-import java.util.stream.Collectors;
+
+import raft.msg.*;
+import raft.server.*;
+
 
 public class RaftNode {
-    public enum Role {
+     public enum Role {
         LEADER,
         FOLLOWER,
         CANDIDATE
     }
 
     // ====== Node Identity ======
-    private final NodeAddr nodeId; // bisa IP:PORT atau ID unik
-    private final List<NodeAddr> clusterNodes; // Peers di cluster, tidak termasuk diri sendiri
-    private final Lock stateLock = new ReentrantLock(); // Untuk melindungi shared state
+    private final Alamat nodeId; // bisa IP:PORT atau ID unik
+    private final List<Alamat> clusterNodes;
 
     // ====== Raft Core State (Persistent) ======
-    private int currentTerm;
-    private NodeAddr votedFor;
-    private List<Entry> log; // Replicated log
+    private int currentTerm ;
+    private Alamat votedFor ;
+    private  List<Entry> log ;
 
-    // ====== Raft Volatile State (on all servers) ======
-    private int commitIndex; // highest log entry known to be committed
-    private int lastApplied; // highest log entry applied to state machine
+    private int commitIndex ;
+    private int lastApplied ;
 
-    private Role role;
-    private NodeAddr currentLeader;
+    private Role role ;
+    private Alamat currentLeader ;
 
     // ====== Timing ======
     private long lastHeartbeatTime;
-    private long electionTimeout; // Random timeout for followers/candidates
-    private static final long HEARTBEAT_INTERVAL = 150; // ms (for leader heartbeats)
+    private long electionTimeout ;
+    private static final long HEARTBEAT_INTERVAL = 150; // ms
+    
 
     // ====== Leader State (Volatile) ======
-    // Reinitialized after election
-    private Map<String, Integer> nextIndex = new ConcurrentHashMap<>(); // for each server, index of the next log entry to send to that server
-    private Map<String, Integer> matchIndex = new ConcurrentHashMap<>(); // for each server, index of the highest log entry known to be replicated on server
+    private Map<Alamat, Integer> nextIndex = new ConcurrentHashMap<>();
+    private Map<Alamat, Integer> matchIndex = new ConcurrentHashMap<>();
 
     // ====== Application Layer ======
-    private KVStore kvStore;
+    private  KVStore kvStore ;
 
     // ===== Election Specifics =====
     private AtomicInteger votesReceived;
-    private final Object electionLock = new Object(); // Masih ada, tapi stateLock lebih utama
+    private final Object stateLock = new Object();
 
     // ==== Concurrency Util =====
     private volatile boolean running;
-    private ScheduledExecutorService scheduler; // Untuk menjalankan 'step' loop
-    private ScheduledExecutorService rpcScheduler; // Untuk mengirim RPC secara konkruen
+    private ScheduledExecutorService scheduler;
 
     // ====== Constructor ======
-    // Default constructor untuk node yang pertama kali start sebagai FOLLOWER (atau leader jika tidak ada contact_addr)
-    public RaftNode(NodeAddr nodeId, List<NodeAddr> initialClusterNodes) {
+    public RaftNode(Alamat nodeId, List<Alamat> initialClusterNodes) {
         this.nodeId = nodeId;
-        // List clusterNodes hanya berisi node lain, tidak termasuk diri sendiri
-        this.clusterNodes = initialClusterNodes.stream()
-                                            .filter(node -> !node.equals(nodeId))
-                                            .collect(Collectors.toList());
-        this.currentTerm = 0; // Term awal
-        this.votedFor = null; // Belum voting
+        this.clusterNodes  = new ArrayList<>(initialClusterNodes);
+        this.currentTerm = 0;
+        this.votedFor = null;
         this.log = new ArrayList<>();
-        this.commitIndex = -1; // Belum ada yang ter-commit
-        this.lastApplied = -1; // Belum ada yang ter-apply
+        this.commitIndex = -1 ;
+        this.lastApplied = -1 ;
         this.role = Role.FOLLOWER;
-        this.currentLeader = null;
+        this.currentLeader = null ; 
         this.lastHeartbeatTime = System.currentTimeMillis();
         this.electionTimeout = randomElectionTimeout();
         this.kvStore = new KVStore();
+        
 
+        //Election
         this.votesReceived = new AtomicInteger(0);
         this.running = true;
         this.scheduler = Executors.newSingleThreadScheduledExecutor();
-        this.rpcScheduler = Executors.newScheduledThreadPool(Runtime.getRuntime().availableProcessors());
-
-        printLog("Node initialized. Starting Raft lifecycle.");
-        startRaftLifecycle(); // Memulai siklus Raft
-    }
-
-    // Constructor lengkap, berguna untuk restore state atau inisialisasi lebih spesifik (misal, leader awal)
-    public RaftNode(NodeAddr nodeId, List<NodeAddr> clusterNodes, int currentTerm, Role role, NodeAddr votedFor, List<Entry> initialLog, int commitIdx, int lastApplied, NodeAddr currentLeader) {
-        this.nodeId = nodeId;
-        this.clusterNodes = clusterNodes.stream()
-                                            .filter(node -> !node.equals(nodeId))
-                                            .collect(Collectors.toList());
-        this.currentTerm = currentTerm;
-        this.votedFor = votedFor;
-        this.log = (initialLog != null) ? new ArrayList<>(initialLog) : new ArrayList<>(); // Deep copy
-        this.commitIndex = commitIdx;
-        this.lastApplied = lastApplied;
-        this.role = role;
-        this.currentLeader = currentLeader;
-
-        this.lastHeartbeatTime = System.currentTimeMillis();
-        this.electionTimeout = randomElectionTimeout();
-        this.kvStore = new KVStore();
-        // Penting: Jika memulihkan state dari log, KVStore harus di-apply ulang
-        // Ini bisa dilakukan dengan memanggil applyLogEntries() setelah konstruksi,
-        // namun perlu memastikan log sudah sesuai commitIndex.
-        // Untuk simplicity di sini, kita anggap KVStore kosong dan akan diisi saat applyLogEntries berjalan.
-
-        if (role == Role.LEADER) {
-            initializeLeaderState();
-        }
-        this.votesReceived = new AtomicInteger(0);
-        this.running = true;
-        this.scheduler = Executors.newSingleThreadScheduledExecutor();
-        this.rpcScheduler = Executors.newScheduledThreadPool(Runtime.getRuntime().availableProcessors());
-
-        printLog("Node initialized with specific state. Starting Raft lifecycle.");
+        
         startRaftLifecycle();
     }
 
-    // Helper untuk menginisialisasi nextIndex dan matchIndex saat menjadi Leader
-    private void initializeLeaderState() {
-        int lastLogIdx = log.isEmpty() ? -1 : log.size() - 1;
-        for (NodeAddr peer : clusterNodes) {
-            String peerId = peer.toString();
-            // Next log entry to send to that server (initially, next after leader's last)
-            nextIndex.put(peerId, lastLogIdx + 1);
-            // Index of the highest log entry known to be replicated on that server (initially -1)
-            matchIndex.put(peerId, -1);
+    public RaftNode(Alamat nodeId, List<Alamat> clusterNodes, int currentTerm, Role role, Alamat votedFor, List<Entry> initialLog, int commitIdx, int  lastApplied, Alamat currentLeader) {
+        this(nodeId, clusterNodes);
+        synchronized (stateLock) {
+            this.currentTerm = currentTerm;
+            this.votedFor = votedFor;
+            this.log = (initialLog != null) ? new ArrayList<>(initialLog) : new ArrayList<>();
+            this.commitIndex = commitIdx;
+            this.lastApplied = lastApplied;
+            this.role = role;
+            this.currentLeader = currentLeader;
+
+            if (role == Role.LEADER) {
+                initializeLeaderState();
+            }
         }
-        printLog("Initialized leader state (nextIndex, matchIndex).");
+        resetHeartbeatTimer();
     }
 
-
-    private void startRaftLifecycle() {
-        // Jalankan metode step secara berkala untuk memicu aksi Raft
-        scheduler.scheduleAtFixedRate(this::step, 0, 50, TimeUnit.MILLISECONDS); // Setiap 50ms
-        printLog("Raft lifecycle scheduler started.");
+    private void initializeLeaderState(){
+        int lastLogIdx = log.size()-1; // Bisa juga log.size() - 1 tergantung implementasi
+            for (Alamat peer : clusterNodes) {
+                if (!peer.equals(this.nodeId)) {
+                    nextIndex.put(peer, lastLogIdx);
+                    matchIndex.put(peer, -1);
+                }
+            }
     }
+
+      private void startRaftLifecycle() {
+        scheduler.scheduleAtFixedRate(() -> {
+            try {
+                if (!running) {
+                    scheduler.shutdown();
+                    return;
+                }
+                step();
+            } catch (Exception e) {
+                System.err.println("[" + nodeId + "] Error in Raft lifecycle: " + e.getMessage());
+                e.printStackTrace();
+            }
+        }, 0, 50, TimeUnit.MILLISECONDS);
+    }
+
 
     // ====== Utility: Election Timeout ======
     private long randomElectionTimeout() {
-        return 150 + new Random().nextInt(150); // antara 150–300 ms   
+        return 150 + new Random().nextInt(150); // antara 150–300 ms
     }
 
     // ====== Timer Update ======
@@ -160,650 +138,437 @@ public class RaftNode {
     }
 
     public boolean isElectionTimeout() {
-        return System.currentTimeMillis() - lastHeartbeatTime > electionTimeout;   
+        return System.currentTimeMillis() - lastHeartbeatTime > electionTimeout;
     }
 
     // ====== State Getters ======
     public int getCurrentTerm() {
-        return currentTerm;   
+        return currentTerm;
     }
 
-    public NodeAddr getVotedFor() {
-        return votedFor;   
+    public Alamat getVotedFor() {
+        return votedFor;
     }
 
     public Role getRole() {
-        return role;   
+        return role;
     }
 
-    public NodeAddr getNodeAdr() {
-        return nodeId;   
+    public Alamat getNodeAdr() {
+        return nodeId;
     }
 
-    public NodeAddr getCurrentLeader() {
-        return currentLeader;   
+    public Alamat getCurrentLeader() {
+        return currentLeader;
     }
 
     public KVStore getKVStore() {
-        return kvStore;   
+        return kvStore;
     }
 
-    public List<Entry> getLog() {
-        return new ArrayList<>(log); // Mengembalikan salinan untuk mencegah modifikasi eksternal
+    public List<Entry> getLogs() {
+        return Collections.unmodifiableList(log); 
     }
 
-    public int getCommitIndex() {
-        return commitIndex;
-    }
+    // TODO: Implementasi utama:
+    // - requestVote
+    // - appendEntries
+    // - becomeLeader / becomeCandidate / becomeFollower
+    // - commit log
+    // - apply log entries to kvStore
 
-    public int getLastApplied() {
-        return lastApplied;
-    }
+    // Step
 
-
-    // Step: Main loop Raft yang dijalankan secara berkala
     private void step() {
-        stateLock.lock(); // Kunci state untuk mencegah race condition
-        try {
+        synchronized (stateLock) {
+            applyCommittedEntries();
+
             if (role == Role.FOLLOWER) {
                 if (isElectionTimeout()) {
-                    printLog("Election timeout. Becoming CANDIDATE.");   
+                    System.out.println("[" + nodeId + "] Election timeout. Becoming CANDIDATE. Term: " + currentTerm);
                     becomeCandidate();
                 }
             } else if (role == Role.CANDIDATE) {
                 if (isElectionTimeout()) {
-                    printLog("Election timeout. Restarting election.");   
-                    startElection(); // Mulai ulang pemilihan jika timeout terjadi saat kandidat
+                    System.out.println("[" + nodeId + "] Election timeout again. Starting new election. Term: " + currentTerm);
+                    startElection();
                 }
             } else if (role == Role.LEADER) {
                 if (System.currentTimeMillis() - lastHeartbeatTime >= HEARTBEAT_INTERVAL) {
-                    sendHeartbeat();   
-                    resetHeartbeatTimer();
+                    // Send heartbeats and replicate logs
+                    System.out.println("[" + nodeId + "] Sending heartbeats/replicating logs. Term: " + currentTerm);
+                    sendAppendEntriesToFollowers();
+                    resetHeartbeatTimer(); // Reset leader's own heartbeat timer
                 }
-                advanceCommitIndex(); // Leader mencoba memajukan commitIndex
+                // Check for log commitment
+                checkLogCommitment();
             }
-            applyLogEntries(); // Terapkan entri yang sudah ter-commit ke KVStore
-        } finally {
-            stateLock.unlock(); // Lepas kunci
+        }
+    }
+
+    private void applyCommittedEntries() {
+        synchronized (stateLock) {
+            while (commitIndex > lastApplied) {
+                lastApplied++;
+                if (lastApplied >= 0 && lastApplied < log.size()) {
+                    Entry entry = log.get(lastApplied);
+                    System.out.println("[" + nodeId + "] Applying log entry[" + lastApplied + "]: " + entry);
+
+                    // Correctly dispatch commands to KVStore based on entry.getCommand()
+                    kvStore.executeCommand(entry.getCommand(), entry.getKey(), entry.getValue());
+
+                } else {
+                    System.err.println("[" + nodeId + "] Error: lastApplied (" + lastApplied + ") out of bounds for log size (" + log.size() + "). CommitIndex: " + commitIndex);
+                    break;
+                }
+            }
+        }
+    }
+
+    private void checkLogCommitment() {
+        synchronized (stateLock) {
+            int majority = (clusterNodes.size() / 2) + 1;
+            // Iterate backwards from highest index down to commitIndex + 1
+            // to find the highest N for which a majority of matchIndex[i] >= N
+            // and log[N].term == currentTerm
+            for (int N = log.size() - 1; N > commitIndex; N--) {
+                int replicatedCount = 0;
+                if (N < 0 || N >= log.size() || log.get(N).getTerm() != currentTerm) {
+                    // Only commit entries from the current term
+                    // N < 0 or N >= log.size() check for safety although loop condition N > commitIndex should handle N>=0
+                    continue;
+                }
+                for (Alamat peer : clusterNodes) {
+                    if (peer.equals(nodeId)) {
+                        replicatedCount++; // Leader's own log is always replicated
+                    } else {
+                        if (matchIndex.containsKey(peer) && matchIndex.get(peer) >= N) {
+                            replicatedCount++;
+                        }
+                    }
+                }
+                if (replicatedCount >= majority) {
+                    commitIndex = N;
+                    System.out.println("[" + nodeId + "] Committed index " + commitIndex);
+                    applyCommittedEntries(); // Apply newly committed entries
+                    break; // Found the highest N that can be committed
+                }
+            }
         }
     }
 
     // Update Role
 
-    private void becomeFollower(int term, NodeAddr leaderId) {
-        // Jika node menerima RPC dengan term yang lebih tinggi, atau jika ia adalah Leader/Candidate
-        // dan menemukan Leader baru dengan term yang sama atau lebih tinggi, ia menjadi Follower.
-        role = Role.FOLLOWER;
-        currentTerm = term;
-        votedFor = null; // Reset votedFor di term baru
-        currentLeader = leaderId;
+     private void becomeFollower(int newTerm, Alamat newLeader) {
+        System.out.println("[" + nodeId + "] Becoming FOLLOWER. Term: " + newTerm + ", Leader: " + newLeader);
+        this.role = Role.FOLLOWER;
+        this.currentTerm = newTerm;
+        this.currentLeader = newLeader;
+        this.votedFor = null; 
         resetHeartbeatTimer();
-        electionTimeout = randomElectionTimeout(); // Set ulang election timeout
-        printLog("Became FOLLOWER for term " + currentTerm + " (Leader: " + (leaderId != null ? leaderId.toString() : "None") + ").");
+        votesReceived.set(0);
     }
 
     private void becomeCandidate() {
-        role = Role.CANDIDATE;
-        currentTerm++; // Increment term
-        votedFor = nodeId; // Vote untuk diri sendiri
-        votesReceived.set(1); // Mulai dengan 1 vote (dari diri sendiri)
-        currentLeader = null; // Tidak ada Leader yang diketahui
-        resetHeartbeatTimer(); // Reset timer untuk election timeout baru
-        electionTimeout = randomElectionTimeout(); // Set election timeout baru
-
-        printLog("Became CANDIDATE for term " + currentTerm + ". Starting election...");
-        startElection();
+        System.out.println("[" + nodeId + "] Becoming CANDIDATE. Term: " + (currentTerm + 1));
+        this.role = Role.CANDIDATE;
+        this.currentTerm++; 
+        this.votedFor = nodeId; 
+        this.votesReceived.set(1);
+        this.currentLeader = null; 
+        resetHeartbeatTimer(); 
+        startElection(); 
     }
 
     private void becomeLeader() {
-        role = Role.LEADER;
-        currentLeader = nodeId;
-        // Inisialisasi nextIndex dan matchIndex untuk setiap follower.
-        // nextIndex diinisialisasi ke (last log index + 1) untuk setiap follower.
-        initializeLeaderState();
-        printLog("Became LEADER for term " + currentTerm + ".");
-        sendHeartbeat(); // Kirim heartbeat segera setelah menjadi leader
-        resetHeartbeatTimer();
+        System.out.println("[" + nodeId + "] Becoming LEADER. Term: " + currentTerm);
+        this.role = Role.LEADER;
+        this.currentLeader = nodeId; 
+        initializeLeaderState(); 
+        sendAppendEntriesToFollowers(); 
+        resetHeartbeatTimer(); 
+        votesReceived.set(0); 
     }
 
-    // Election Logic
+    // Election
 
-    private void startElection() {
-        stateLock.lock();
-        try {
-            // Panggil becomeCandidate untuk memastikan state sudah benar
-            // (term sudah di-increment, votedFor self, votesReceived 1, timer reset)
-            becomeCandidate();
+    private void startElection(){
+        synchronized(stateLock){
+        int peerCount = clusterNodes.size() - 1; 
+        if (peerCount == 0) { 
+            System.out.println("[" + nodeId + "] Single node cluster. Becoming LEADER immediately.");
+            becomeLeader();
+            return;
+        }
 
-            int lastLogIndex = log.isEmpty() ? -1 : log.size() - 1;
-            int lastLogTerm = log.isEmpty() ? 0 : log.get(lastLogIndex).getTerm();
+        System.out.println("[" + nodeId + "] Starting election for Term " + currentTerm + ". Sending RequestVote RPCs.");
+        
+        // Get last log detail
+        int lastLogIndex = log.isEmpty() ? -1 : log.size() - 1;
+        int lastLogTerm = log.isEmpty() ? 0 : log.get(log.size() - 1).getTerm();
 
-            // Kirim RequestVote RPC ke semua node lain
-            for (NodeAddr peer : clusterNodes) {
-                // Gunakan rpcScheduler untuk mengirim RPC secara non-blocking
-                rpcScheduler.submit(() -> {
-                    try {
-                        printLog("Sending   NewVoteReq to " + peer);
-                          NewVoteReq request = new   NewVoteReq(currentTerm, nodeId, peer, lastLogIndex, lastLogTerm);
+        // concurrent RPC calls
+        Executors.newCachedThreadPool().submit(() -> {
+                for (Alamat peer : clusterNodes) {
+                    if (!peer.equals(nodeId)) {
+                        final Alamat currentPeer = peer; // For use in lambda
+                        // Use a new thread for each RPC to avoid blocking the main Raft lifecycle thread
+                        // This thread should be managed better in a real setup (e.g., dedicated pool for RPCs)
+                        new Thread(() -> {
+                            RPCClient rpcClient = new RPCClient(currentPeer);
+                            VoteReq voteRequest = new VoteReq(currentTerm, nodeId, currentPeer, lastLogIndex, lastLogTerm);
 
-                        // --- SIMULASI RPC CALL ---
-                        // Ini adalah placeholder. Dalam implementasi nyata, Anda akan menggunakan gRPC client di sini.
-                        // Misalnya: RaftServiceGrpc.RaftServiceBlockingStub stub = RaftServiceGrpc.newBlockingStub(channel);
-                        // NewVoteResp response = stub.requestVote(convertToJavaGrpcRequest(request));
-                        // Untuk contoh ini, kita akan memanggil metode statis di Main untuk simulasi.
-                        NewVoteResp response = Main.sendRequestVoteSimulated(request); // Panggil metode simulasi RPC di Main
+                            try {
+                                System.out.println("[" + nodeId + "] Requesting vote from " + currentPeer + " for Term " + currentTerm);
+                                VoteResp response = rpcClient.requestVote(voteRequest);
 
-                        stateLock.lock(); // Kunci state lagi untuk memproses respons
-                        try {
-                            // Rule 1: All servers, if RPC request or response contains a higher term:
-                            // update currentTerm, convert to follower.
-                            if (response.getTerm() > currentTerm) {
-                                printLog("Received NewVoteResp with higher term (" + response.getTerm() + "). Becoming FOLLOWER.");
-                                becomeFollower(response.getTerm(), null); // Leader is unknown
-                                return;
-                            }
+                                synchronized (stateLock) {
+                                    // If term T > currentTerm: set currentTerm = T. convert to follower
+                                    if (response.getTerm() > currentTerm) {
+                                        System.out.println("[" + nodeId + "] Discovered higher term " + response.getTerm() + " from " + currentPeer + ". Becoming FOLLOWER.");
+                                        becomeFollower(response.getTerm(), null);
+                                        return;
+                                    }
 
-                            // Hanya proses jika masih CANDIDATE dan term sama
-                            if (role == Role.CANDIDATE && response.getTerm() == currentTerm) {
-                                if (response.isVoteGranted()) {
-                                    votesReceived.incrementAndGet();
-                                    printLog("Received vote from " + response.getFrom() + ". Total votes: " + votesReceived.get() + " (out of " + getMajority() + " needed).");
-                                    // Rule 2: If votes received from majority of servers: become leader.
-                                    if (votesReceived.get() >= getMajority()) {
-                                        if (role == Role.CANDIDATE) { // Cek lagi apakah masih kandidat
-                                            printLog("Majority votes received! Becoming LEADER.");
-                                            becomeLeader();
+                                    // If role = CANDIDATE and term = currentTerm
+                                    if (role == Role.CANDIDATE && response.getTerm() == currentTerm) {
+                                        if (response.isVoteGranted()) {
+                                            int currentVotes = votesReceived.incrementAndGet();
+                                            System.out.println("[" + nodeId + "] Received vote from " + currentPeer + ". Total votes: " + currentVotes);
+                                            if (currentVotes > (clusterNodes.size() / 2)) {
+                                                System.out.println("[" + nodeId + "] Achieved majority votes. Becoming LEADER.");
+                                                becomeLeader();
+                                                return;
+                                            }
                                         }
                                     }
-                                } else {
-                                    printLog("Vote denied by " + response.getFrom() + " for term " + response.getTerm());
                                 }
+                            } catch (Exception e) {
+                                System.err.println("[" + nodeId + "] Failed to request vote from " + currentPeer + ": " + e.getMessage());
                             }
-                        } finally {
-                            stateLock.unlock();
-                        }
-                    } catch (Exception e) {
-                        printLog("Error sending   NewVoteReq to " + peer + ": " + e.getMessage());
-                        // Dalam sistem nyata, bisa jadi node ini tidak reachable, perlu penanganan lebih lanjut
+                        }).start();
                     }
-                });
+                }
+            });
+    }
+    }
+
+    public VoteResp requestVote(VoteReq request) {
+        synchronized (stateLock) {
+            System.out.println("[" + nodeId + "] Received RequestVote from " + request.getFrom() + " for Term " + request.getTerm());
+
+            // Reply false if term < currentTerm
+            if (request.getTerm() < currentTerm) {
+                System.out.println("[" + nodeId + "] Denying vote: Request term " + request.getTerm() + " < current term " + currentTerm);
+                return new VoteResp(currentTerm, false, nodeId, request.getFrom());
             }
-        } finally {
-            stateLock.unlock();
-        }
-    }
 
-    // Menghitung jumlah mayoritas node (termasuk diri sendiri)
-    private int getMajority() {
-        return (clusterNodes.size() + 1) / 2 + 1; // +1 untuk diri sendiri
-    }
-
-    // RPC Handler: RequestVote
-    // Dipanggil oleh kandidat lain yang meminta vote
-    public NewVoteResp requestVote(  NewVoteReq request) {
-        stateLock.lock();
-        try {
-            printLog("Received   NewVoteReq from " + request.getFrom() + " for term " + request.getTerm() +
-                    ". My term: " + currentTerm + ", votedFor: " + (votedFor != null ? votedFor.toString() : "null"));
-
-            boolean voteGranted = false;
-
-            // 1. If RPC request or response contains a higher term:
-            // update currentTerm, convert to follower.
+            // If term T > currentTerm: set currentTerm = T. convert to follower
             if (request.getTerm() > currentTerm) {
-                printLog("Candidate's term (" + request.getTerm() + ") is higher. Updating term and becoming FOLLOWER.");
+                System.out.println("[" + nodeId + "] Discovered higher term " + request.getTerm() + " from " + request.getFrom() + ". Becoming FOLLOWER.");
                 becomeFollower(request.getTerm(), null);
             }
 
-            // 2. If `request.term < currentTerm` reply false.
-            if (request.getTerm() < currentTerm) {
-                printLog("Vote denied: Candidate's term (" + request.getTerm() + ") < current term (" + currentTerm + ").");
-                voteGranted = false;
-            }
-            // 3. If `votedFor` is null or `request.candidateId`:
-            //    and candidate’s log is at least as up-to-date as receiver’s log, grant vote.
-            else if (votedFor == null || votedFor.equals(request.getCandidateId())) {
-                int lastLogIndex = log.isEmpty() ? -1 : log.size() - 1;
-                int lastLogTerm = log.isEmpty() ? 0 : log.get(lastLogIndex).getTerm();
+            // If votedFor == null or candidateId, and candidate's log is at least as up-to-date, grant vote
+            boolean canGrantVote = (votedFor == null || votedFor.equals(request.getCandidateId()));
 
-                // Raft "up-to-date" check (Raft Paper Figure 2, RequestVote RPC, Receiver implementation rules):
-                // if (candidate's last log term > receiver's last log term) OR
-                // (candidate's last log term == receiver's last log term AND candidate's last log index >= receiver's last log index)
-                boolean candidateLogIsUpToDate =
-                        request.getLastLogTerm() > lastLogTerm ||
-                        (request.getLastLogTerm() == lastLogTerm && request.getLastLogIndex() >= lastLogIndex);
+            boolean isLogUpToDate = isCandidateLogUpToDate(request.getLastLogIndex(), request.getLastLogTerm());
 
-                if (candidateLogIsUpToDate) {
-                    voteGranted = true;
-                    votedFor = request.getCandidateId(); // Set votedFor
-                    resetHeartbeatTimer(); // Reset timer saat memberikan vote
-                    printLog("Vote granted to " + request.getCandidateId() + " for term " + request.getTerm());
-                } else {
-                    printLog("Vote denied: Candidate's log is not as up-to-date.");
-                }
+            if (canGrantVote && isLogUpToDate) {
+                votedFor = request.getCandidateId(); // Grant vote
+                System.out.println("[" + nodeId + "] Granting vote to " + request.getCandidateId() + " for Term " + currentTerm);
+                resetHeartbeatTimer(); 
+                return new VoteResp(currentTerm, true, nodeId, request.getFrom());
             } else {
-                printLog("Vote denied: Already voted for " + votedFor + " in this term.");
+                System.out.println("[" + nodeId + "] Denying vote for " + request.getCandidateId() + ". Reason: votedFor=" + votedFor + ", logUpToDate=" + isLogUpToDate);
+                return new VoteResp(currentTerm, false, nodeId, request.getFrom());
             }
-
-            return new NewVoteResp(currentTerm, voteGranted, nodeId, request.getFrom());
-        } finally {
-            stateLock.unlock();
         }
     }
 
+    private boolean isCandidateLogUpToDate(int candidateLastLogIndex, int candidateLastLogTerm) {
+        synchronized (stateLock) {
+            int ownLastLogIndex = log.isEmpty() ? -1 : log.size() - 1;
+            int ownLastLogTerm = log.isEmpty() ? 0 : log.get(ownLastLogIndex == -1 ? 0 : ownLastLogIndex).getTerm(); // Handle empty log for term
 
-    // RPC Handler: AppendEntries (termasuk Heartbeat)
-    // Dipanggil oleh Leader untuk mereplikasi entri log atau sebagai heartbeat
+            return (candidateLastLogTerm > ownLastLogTerm) ||
+                   (candidateLastLogTerm == ownLastLogTerm && candidateLastLogIndex >= ownLastLogIndex);
+        }
+    }
+
     public NewEntryResp appendEntries(NewEntryReq request) {
-        stateLock.lock();
-        try {
-            printLog("Received NewEntryReq from " + request.getFrom() + " for term " + request.getTerm() +
-                    ", prevLogIdx: " + request.getPrevLogIdx() + ", entries: " + request.getEntries().size());
+        synchronized (stateLock) {
+            System.out.println("[" + nodeId + "] Received AppendEntries from " + request.getFrom() + " for Term " + request.getTerm() + " (Heartbeat: " + request.getEntries().isEmpty() + ")");
 
-            // 1. Reply false if `request.term < currentTerm`
+            // Reply false if term < currentTerm
             if (request.getTerm() < currentTerm) {
-                printLog("NewEntryReq denied: Leader's term (" + request.getTerm() + ") < current term (" + currentTerm + ").");
+                System.out.println("[" + nodeId + "] Denying AppendEntries: Request term " + request.getTerm() + " < current term " + currentTerm);
                 return new NewEntryResp(currentTerm, false, nodeId, request.getFrom());
             }
 
-            // Jika term Leader >= currentTerm, ini adalah Leader yang valid (atau calon Leader)
-            // Reset timer dan update current leader.
-            resetHeartbeatTimer();
-            // Jika term leader lebih tinggi, atau jika node ini bukan follower, menjadi follower
-            if (request.getTerm() > currentTerm || role != Role.FOLLOWER) {
+            // If term T > currentTerm: set currentTerm = T. convert to follower
+            // If AppendEntries RPC received from new leader: convert to follower
+            if (request.getTerm() > currentTerm || role != Role.FOLLOWER) { 
+                System.out.println("[" + nodeId + "] Received valid AppendEntries from new leader " + request.getFrom() + ". Becoming FOLLOWER. Term: " + request.getTerm());
                 becomeFollower(request.getTerm(), request.getFrom());
-            } else { // Jika term sama dan sudah follower, hanya update currentLeader (misal setelah network partition)
-                currentLeader = request.getFrom();
+            } else { // Current role is Follower, term is equal
+                // Valid heartbeat/AppendEntries from current leader
+                resetHeartbeatTimer();
+                this.currentLeader = request.getFrom();
             }
 
-            // 2. Reply false if log doesn’t contain an entry at `prevLogIndex`
-            //    whose term matches `prevLogTerm`.
-            // prevLogIndex -1 artinya tidak ada previous log entry (misal, log kosong)
-            if (request.getPrevLogIdx() >= 0 && log.size() <= request.getPrevLogIdx()) {
-                printLog("NewEntryReq denied: prevLogIndex (" + request.getPrevLogIdx() + ") out of bounds (log size: " + log.size() + ").");
-                return new NewEntryResp(currentTerm, false, nodeId, request.getFrom());
-            }
-            if (request.getPrevLogIdx() >= 0 && log.get(request.getPrevLogIdx()).getTerm() != request.getPrevLogTerm()) {
-                printLog("NewEntryReq denied: prevLogTerm mismatch at index " + request.getPrevLogIdx() +
-                        ". Expected: " + request.getPrevLogTerm() + ", Found: " + log.get(request.getPrevLogIdx()).getTerm());
-                // Follower mungkin harus menghapus log dari index ini ke belakang
-                // Simplified: Leader akan mencoba lagi dengan nextIndex yang lebih kecil
-                return new NewEntryResp(currentTerm, false, nodeId, request.getFrom());
+            // --- Log Consistency Check ---
+            // Reply false if log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm
+            // This is ONLY for non-heartbeat. Heartbeats don't need log consistency checks.
+            if (request.getPrevLogIdx() >= 0) { 
+                if (log.size() <= request.getPrevLogIdx() || log.get(request.getPrevLogIdx()).getTerm() != request.getPrevLogTerm()) {
+                    System.out.println("[" + nodeId + "] Denying AppendEntries: Log consistency check failed.");
+                    System.out.println("  PrevLogIdx: " + request.getPrevLogIdx() + ", PrevLogTerm: " + request.getPrevLogTerm());
+                    System.out.println("  Own Log Size: " + log.size() + ", Own Term at Index: " + (log.size() > request.getPrevLogIdx() ? log.get(request.getPrevLogIdx()).getTerm() : "N/A"));
+                    return new NewEntryResp(currentTerm, false, nodeId, request.getFrom());
+                }
             }
 
-            // 3. If an existing entry conflicts with a new one (same index but different terms),
-            //    delete the existing entry and all that follow it.
-            int conflictIndex = -1;
+            // If an existing entry conflicts with a new one (same index but different terms),
+            // delete the existing entry and all that follow it.
+            // Append any new entries not already in the log.
             for (int i = 0; i < request.getEntries().size(); i++) {
+                Entry newEntry = request.getEntries().get(i);
                 int logIndex = request.getPrevLogIdx() + 1 + i;
-                if (logIndex < log.size() && log.get(logIndex).getTerm() != request.getEntries().get(i).getTerm()) {
-                    conflictIndex = logIndex;
-                    break;
-                }
-            }
-            if (conflictIndex != -1) {
-                printLog("Log conflict detected at index " + conflictIndex + ". Truncating log.");
-                log = new ArrayList<>(log.subList(0, conflictIndex));
-            }
 
-            // 4. Append any new entries not already in the log.
-            // (Ini sudah ditangani oleh for loop di atas, karena jika ada konflik, log sudah di-truncate)
-            for (Entry newEntry : request.getEntries()) {
-                // Pastikan entry belum ada sebelum ditambahkan
-                // Jika log di-truncate, maka semua entry baru dari Leader akan ditambahkan.
-                // Jika tidak di-truncate, pastikan tidak menambahkan duplikat
-                int entryIndex = request.getPrevLogIdx() + 1 + request.getEntries().indexOf(newEntry);
-                if (entryIndex >= log.size()) { // Jika index melebihi ukuran log, berarti entry ini baru
-                    log.add(newEntry);
-                    printLog("Appended log entry: " + newEntry);
+                if (logIndex < log.size()) { // If entry exists at this index
+                    if (log.get(logIndex).getTerm() != newEntry.getTerm()) {
+                        // Conflict
+                        System.out.println("[" + nodeId + "] Conflicting entry at index " + logIndex + ". Truncating log.");
+                        log = new ArrayList<>(log.subList(0, logIndex));
+                        log.add(newEntry); // Append the new entry
+                    } else {
+                        // Same index, same term == duplicate.
+                    }
                 } else {
-                    // Jika entryIndex sudah ada, dan tidak ada konflik (term sama),
-                    // berarti entry ini sudah ada dan tidak perlu ditambahkan lagi.
+                    // Index is beyond current log size, simply append new entry
+                    log.add(newEntry);
+                    System.out.println("[" + nodeId + "] Appended new entry at index " + logIndex + ": " + newEntry);
                 }
             }
 
-
-            // 5. If `leaderCommit > commitIndex`, set `commitIndex = min(leaderCommit, index of last new entry)`.
+            // If leaderCommit > commitIndex, set commitIndex = min(leaderCommit, index of last new entry)
             if (request.getLeaderCommit() > commitIndex) {
-                int lastNewEntryIndex = log.isEmpty() ? -1 : log.size() - 1;
-                commitIndex = Math.min(request.getLeaderCommit(), lastNewEntryIndex);
-                printLog("Updated commitIndex to " + commitIndex);
-                applyLogEntries(); // Segera apply perubahan ke state machine
+                // Last log index received from leader
+                int lastReceivedLogIndex = request.getPrevLogIdx() + request.getEntries().size();
+                commitIndex = Math.min(request.getLeaderCommit(), lastReceivedLogIndex);
+                System.out.println("[" + nodeId + "] Updated commitIndex to " + commitIndex);
+                applyCommittedEntries(); // Apply newly committed entries
             }
 
-            return new NewEntryResp(currentTerm, true, nodeId, request.getFrom());
-        } finally {
-            stateLock.unlock();
+            return new NewEntryResp(currentTerm, true, nodeId, request.getFrom());}
         }
-    }
 
+     private void sendAppendEntriesToFollowers() {
+        synchronized (stateLock) {
+            if (role != Role.LEADER) return; // Should not happen
 
-    // Leader: Mengirim Heartbeat/AppendEntries ke semua follower
-    private void sendHeartbeat() {
-        if (role != Role.LEADER) return;
+            // For each follower, send AppendEntries RPC
+            Executors.newCachedThreadPool().submit(() -> {
+                for (Alamat peer : clusterNodes) {
+                    if (!peer.equals(nodeId)) {
+                        final Alamat currentPeer = peer;
+                        // Use a new thread for each RPC to avoid blocking.
+                        // For production, consider using a fixed thread pool or CompletableFuture for better management.
+                        new Thread(() -> {
+                            RPCClient rpcClient = new RPCClient(currentPeer);
+                            int nextIdx = nextIndex.getOrDefault(currentPeer, log.size()); // Get nextIndex for this peer
+                            int prevLogIdx = nextIdx - 1;
+                            int prevLogTerm = (prevLogIdx >= 0 && prevLogIdx < log.size()) ? log.get(prevLogIdx).getTerm() : 0;
 
-        printLog("[Leader] Sending heartbeat/AppendEntries RPCs.");
+                            // Entries to send to this follower (from nextIdx onwards)
+                            List<Entry> entriesToSend = new ArrayList<>();
+                            if (nextIdx < log.size()) {
+                                entriesToSend.addAll(log.subList(nextIdx, log.size()));
+                            }
 
-        for (NodeAddr peer : clusterNodes) {
-            rpcScheduler.submit(() -> {
-                stateLock.lock(); // Kunci state RaftNode saat mempersiapkan request
-                try {
-                    int nextIdx = nextIndex.getOrDefault(peer.toString(), log.size());
-                    // Pastikan nextIdx tidak negatif
-                    nextIdx = Math.max(0, nextIdx);
+                            NewEntryReq req = new NewEntryReq(
+                                currentTerm, nodeId, // Leader ID
+                                prevLogIdx, prevLogTerm,
+                                entriesToSend,
+                                commitIndex, // Leader's commit index
+                                nodeId, currentPeer // From and To
+                            );
 
-                    int prevLogIndex = nextIdx - 1;
-                    int prevLogTerm = (prevLogIndex >= 0 && prevLogIndex < log.size()) ? log.get(prevLogIndex).getTerm() : 0;
+                            try {
+                                NewEntryResp response = rpcClient.appendEntries(req);
 
-                    List<Entry> entriesToSend = new ArrayList<>();
-                    if (nextIdx < log.size()) { // Hanya kirim jika ada entri baru
-                        entriesToSend = new ArrayList<>(log.subList(nextIdx, log.size()));
+                                synchronized (stateLock) {
+                                    if (role != Role.LEADER) return; // No longer leader, stop
+
+                                    if (response.getTerm() > currentTerm) {
+                                        System.out.println("[" + nodeId + "] Discovered higher term " + response.getTerm() + " from " + currentPeer + ". Becoming FOLLOWER.");
+                                        becomeFollower(response.getTerm(), null);
+                                        return;
+                                    }
+
+                                    if (response.isSuccess()) {
+                                        // Update nextIndex and matchIndex for this follower
+                                        // nextIndex = index of the log entry immediately following the new ones.
+                                        // matchIndex = highest log entry known to be replicated on the follower.
+                                        int newMatchIndex = prevLogIdx + entriesToSend.size(); // The index of the last entry successfully replicated
+                                        matchIndex.put(currentPeer, newMatchIndex);
+                                        nextIndex.put(currentPeer, newMatchIndex + 1);
+                                        System.out.println("[" + nodeId + "] Log replicated to " + currentPeer + ". matchIndex: " + newMatchIndex + ", nextIndex: " + (newMatchIndex + 1));
+                                    } else {
+                                        // AppendEntries failed due to log inconsistency (Rule 8)
+                                        // Decrement nextIndex and retry (next heartbeat/AppendEntries cycle)
+                                        // This will cause the leader to send a shorter set of logs on the next go.
+                                        nextIndex.computeIfPresent(currentPeer, (k, v) -> Math.max(0, v - 1));
+                                        System.out.println("[" + nodeId + "] AppendEntries to " + currentPeer + " failed. Decrementing nextIndex to " + nextIndex.get(currentPeer));
+                                    }
+                                }
+                            } catch (Exception e) {
+                                System.err.println("[" + nodeId + "] Failed to send AppendEntries to " + currentPeer + ": " + e.getMessage());
+                            }
+                        }).start();
                     }
-
-                    NewEntryReq request = new NewEntryReq(currentTerm, nodeId, prevLogIndex, prevLogTerm, entriesToSend, commitIndex, peer, nodeId);
-
-                    // --- SIMULASI RPC CALL ---
-                    // Panggil metode simulasi RPC di Main.
-                    NewEntryResp response = Main.sendAppendEntriesSimulated(request);
-
-                    stateLock.lock(); // Kunci state lagi untuk memproses respons
-                    try {
-                        if (role != Role.LEADER) return; // Jika peran berubah saat menunggu respons
-
-                        // Rule 1: If RPC request or response contains a higher term:
-                        // update currentTerm, convert to follower.
-                        if (response.getTerm() > currentTerm) {
-                            printLog("Received AppendEntriesResp with higher term (" + response.getTerm() + ") from " + peer + ". Becoming FOLLOWER.");
-                            becomeFollower(response.getTerm(), null);
-                            return;
-                        }
-
-                        // Jika berhasil (AppendEntries atau Heartbeat ACK)
-                        if (response.isSuccess()) {
-                            // Jika berhasil, update nextIndex dan matchIndex untuk follower ini
-                            // matchIndex adalah indeks entry log tertinggi yang diketahui direplikasi.
-                            matchIndex.put(peer.toString(), nextIdx + entriesToSend.size() - 1);
-                            // nextIndex adalah indeks entry log berikutnya yang akan dikirim.
-                            nextIndex.put(peer.toString(), nextIdx + entriesToSend.size());
-                            printLog("AppendEntries to " + peer + " successful. nextIndex: " + nextIndex.get(peer.toString()) + ", matchIndex: " + matchIndex.get(peer.toString()));
-                        } else {
-                            // Jika gagal (misal, log tidak konsisten, atau prevLogIndex/Term salah)
-                            // Leader decrement nextIndex dan retry.
-                            nextIndex.compute(peer.toString(), (k, v) -> Math.max(0, v - 1)); // Decrement nextIndex, pastikan tidak negatif
-                            printLog("AppendEntries to " + peer + " failed. Decrementing nextIndex to " + nextIndex.get(peer.toString()));
-                            // Leader akan mencoba lagi di heartbeat berikutnya, atau bisa juga langsung retry
-                        }
-                    } finally {
-                        stateLock.unlock();
-                    }
-                } catch (Exception e) {
-                    printLog("Error sending AppendEntries to " + peer + ": " + e.getMessage());
-                } finally {
-                    // Pastikan lock dilepas meskipun ada exception saat menyiapkan request
-                    stateLock.unlock();
                 }
             });
         }
     }
 
-    // Leader: Mencoba memajukan commitIndex
-    private void advanceCommitIndex() {
-        if (role != Role.LEADER) return;
-
-        stateLock.lock();
-        try {
-            // Leader mencari N tertinggi sehingga log[N].term == currentTerm
-            // dan log[N] direplikasi di mayoritas server.
-            for (int N = log.size() - 1; N > commitIndex; N--) {
-                if (log.get(N).getTerm() == currentTerm) { // Hanya komit entri dari term saat ini
-                    int replicationCount = 1; // Termasuk diri sendiri (leader)
-                    for (Map.Entry<String, Integer> entry : matchIndex.entrySet()) {
-                        if (entry.getValue() >= N) {
-                            replicationCount++;
-                        }
-                    }
-                    if (replicationCount >= getMajority()) {
-                        commitIndex = N;
-                        printLog("Leader advanced commitIndex to " + commitIndex);
-                        break; // Temukan N tertinggi, lalu keluar
-                    }
-                }
-            }
-        } finally {
-            stateLock.unlock();
-        }
-    }
-
-    // Menerapkan entri log yang sudah ter-commit ke state machine (KVStore)
-    private void applyLogEntries() {
-        stateLock.lock();
-        try {
-            while (lastApplied < commitIndex) {
-                lastApplied++;
-                Entry entryToApply = log.get(lastApplied);
-                printLog("Applying log entry to KVStore: " + entryToApply);
-                executeCommandOnKVStore(entryToApply);
-            }
-        } finally {
-            stateLock.unlock();
-        }
-    }
-
-    // Helper untuk mengeksekusi perintah pada KVStore dari sebuah Entry
-    private void executeCommandOnKVStore(Entry entry) {
-        // Menggunakan CommandType jika Anda mengimplementasikannya
-        // else if (entry.getCommand().equalsIgnoreCase("SET"))
-        switch (entry.getCommand().toUpperCase()) {
-            case "SET":
-                kvStore.set(entry.getKey(), entry.getValue());
-                break;
-            case "APPEND":
-                kvStore.append(entry.getKey(), entry.getValue());
-                break;
-            case "DEL":
-                kvStore.del(entry.getKey());
-                break;
-            // PING, GET, STRLEN tidak mengubah state, jadi tidak perlu di-apply dari log
-            default:
-                printLog("Unknown command in log entry, cannot apply: " + entry.getCommand());
-                break;
-        }
-    }
-
-
-    // Client RPCs: `execute` dan `request_log` (dipanggil oleh ClientServer)
-
-    /**
-     * Menangani permintaan klien untuk menjalankan perintah (ping, get, set, strLen, del, append).
-     * Semua permintaan klien harus ke Leader. Jika bukan Leader, akan redirect.
-     *
-     * @param command Perintah (misal: "SET", "GET", "PING").
-     * @param key Kunci untuk perintah. Bisa null.
-     * @param value Nilai untuk perintah. Bisa null.
-     * @return Respons String (misal: "OK", "PONG", nilai, pesan error).
-     */
-    public String execute(String command, String key, String value) {
-        stateLock.lock();
-        try {
-            // Spesifikasi: "semua interface untuk client hanya dieksekusi jika request dikirimkan ke Leader. Selain itu tolak dan redirect" [cite: 185, 186, 188]
+    public String handleClientRequest(String commandType, String key, String value) {
+        synchronized (stateLock) {
             if (role != Role.LEADER) {
-                if (currentLeader != null) {
-                    printLog("Client request for " + command + " redirected. Not leader. Current leader: " + currentLeader);
-                    return "REDIRECT:" + currentLeader.getHost() + ":" + currentLeader.getPort();
-                } else {
-                    printLog("Client request for " + command + " denied. No leader known.");
-                    return "ERROR: No leader known. Try again later.";
-                }
+                // Redirect client to leader
+                return "REDIRECT:" + (currentLeader != null ? currentLeader.toString() : "UNKNOWN");
             }
 
-            // Jika Leader:
-            // Perintah yang mengubah state (SET, APPEND, DEL) harus dicatat ke log Raft
-            if (command.equalsIgnoreCase("SET") || command.equalsIgnoreCase("APPEND") || command.equalsIgnoreCase("DEL")) {
-                Entry newEntry = new Entry(currentTerm, command.toUpperCase(), key, value); // Gunakan command.toUpperCase() untuk konsistensi
-                log.add(newEntry);
-                printLog("Leader proposed new log entry: " + newEntry + ". Current log size: " + log.size());
+            // Create an Entry for the command
+            Entry newEntry = new Entry(currentTerm, commandType, key, value);
+            log.add(newEntry); 
+            System.out.println("[" + nodeId + "] Leader appended client command to log: " + newEntry);
 
-                // Di implementasi Raft yang sebenarnya, Leader akan mengirim AppendEntries
-                // ke followers dan menunggu mayoritas ACK sebelum commit dan merespons OK.
-                // Untuk demo, kita akan merespons OK segera setelah menambahkan ke log Leader,
-                // dan asumsi replikasi akan terjadi di heartbeat berikutnya.
-                // Metode `advanceCommitIndex` akan mengurus commit log dan `applyLogEntries` akan menerapkan ke KVStore.
-                // Note: Ini adalah penyederhanaan yang bisa menyebabkan inconsistency sementara jika leader crash
-                // sebelum log direplikasi mayoritas. Real Raft akan blocking sampai majority ACK.
-                return "OK";
-            }
-            // Perintah read-only (PING, GET, STRLEN) dapat langsung dieksekusi dari KVStore
-            // karena tidak mengubah state dan tidak perlu replikasi log.
-            else if (command.equalsIgnoreCase("PING")) {
-                printLog("Executing PING command.");
-                return kvStore.ping();
-            } else if (command.equalsIgnoreCase("GET")) {
-                printLog("Executing GET command for key: " + key);
-                return kvStore.get(key);
-            } else if (command.equalsIgnoreCase("STRLEN")) { // Menggunakan STRLEN sesuai spec   
-                printLog("Executing STRLEN command for key: " + key);
-                return String.valueOf(kvStore.strLen(key));
-            } else {
-                printLog("Unknown client command: " + command);
-                return "ERROR: Unknown command";
-            }
-        } finally {
-            stateLock.unlock();
-        }
-    }
-
-    /**
-     * Mengembalikan seluruh log dari Leader node.
-     *
-     * @return List of String representasi dari log entries.
-     */
-    public List<String> requestLog() {
-        stateLock.lock();
-        try {
-            // Spesifikasi: "semua interface untuk client hanya dieksekusi jika request dikirimkan ke Leader. Selain itu tolak dan redirect" [cite: 185, 186, 188]
-            if (role != Role.LEADER) {
-                if (currentLeader != null) {
-                    printLog("Client request for log redirected. Not leader. Current leader: " + currentLeader);
-                    return List.of("REDIRECT:" + currentLeader.getHost() + ":" + currentLeader.getPort());
-                } else {
-                    printLog("Client request for log denied. No leader known.");
-                    return List.of("ERROR: No leader known. Try again later.");
-                }
-            }
-            printLog("Returning current log to client.");
-            return log.stream().map(Entry::toString).collect(Collectors.toList());
-        } finally {
-            stateLock.unlock();
-        }
-    }
-
-    // Membership Change (Implementasi disederhanakan untuk contoh)
-    // Spesifikasi menyebutkan "Membership Change" (Mekanisme untuk menambahkan dan menghapus node pada kluster berdasarkan perintah pengguna).   
-    // Juga "Node yang mati tidak secara otomatis dikeluarkan dari cluster."   
-    // Dan "Membership change (add member, remove member) dilakukan setelah kluster berjalan."   
-
-    /**
-     * Menambahkan node baru ke daftar cluster.
-     * Dalam Raft sebenarnya, ini adalah entri log konfigurasi yang direplikasi.
-     * @param newNodeId Alamat node baru yang akan ditambahkan.
-     * @return True jika berhasil ditambahkan, false jika sudah ada atau invalid.
-     */
-    public boolean addClusterMember(NodeAddr newNodeId) {
-        stateLock.lock();
-        try {
-            if (nodeId.equals(newNodeId)) {
-                printLog("Cannot add self as cluster member.");
-                return false;
-            }
-            if (!clusterNodes.contains(newNodeId)) {
-                clusterNodes.add(newNodeId);
-                // Jika saya adalah leader, saya perlu menginisialisasi nextIndex dan matchIndex untuk node baru ini
-                if (role == Role.LEADER) {
-                    int lastLogIdx = log.isEmpty() ? -1 : log.size() - 1;
-                    nextIndex.put(newNodeId.toString(), lastLogIdx + 1);
-                    matchIndex.put(newNodeId.toString(), -1);
-                }
-                printLog("Added new cluster member: " + newNodeId + ". Current cluster: " + clusterNodes);
-                return true;
-            }
-            printLog("Node " + newNodeId + " is already a cluster member.");
-            return false;
-        } finally {
-            stateLock.unlock();
-        }
-    }
-
-    /**
-     * Menghapus node dari daftar cluster.
-     * Dalam Raft sebenarnya, ini adalah entri log konfigurasi. Sangat kompleks.
-     * Untuk demo ini, hanya hapus dari daftar peers.
-     * @param nodeToRemove Alamat node yang akan dihapus.
-     * @return True jika berhasil dihapus, false jika tidak ditemukan.
-     */
-    public boolean removeClusterMember(NodeAddr nodeToRemove) {
-        stateLock.lock();
-        try {
-            if (nodeId.equals(nodeToRemove)) {
-                printLog("Cannot remove self from cluster member list.");
-                return false;
-            }
-            boolean removed = clusterNodes.remove(nodeToRemove);
-            if (removed) {
-                // Jika saya adalah leader, saya juga perlu menghapus nextIndex dan matchIndex mereka
-                if (role == Role.LEADER) {
-                    nextIndex.remove(nodeToRemove.toString());
-                    matchIndex.remove(nodeToRemove.toString());
-                }
-                printLog("Removed cluster member: " + nodeToRemove + ". Current cluster: " + clusterNodes);
-            } else {
-                printLog("Node " + nodeToRemove + " not found in cluster members.");
-            }
-            return removed;
-        } finally {
-            stateLock.unlock();
+            
+            return "OK_PENDING_COMMIT"; 
         }
     }
 
 
-    // Dummy RPC simulations for testing within a single process.
-    // Ini adalah placeholder. Dalam aplikasi nyata, Anda akan mengirim ini melalui jaringan gRPC.
-    // Metode ini akan dipanggil oleh RaftNode itu sendiri untuk berkomunikasi dengan node lain.
-    // Asumsi: Main.java akan menyediakan static helper method untuk melakukan panggilan simulated RPC ini.
-    // Anda harus memastikan Main.java memiliki metode `sendRequestVoteSimulated` dan `sendAppendEntriesSimulated`.
-    // (Ini sudah saya sertakan di Main.java yang saya berikan sebelumnya).
-    // Implementasi nyata akan menggunakan gRPC client dan server.
-
-    // Utility untuk logging dengan timestamp dan ID node
-    private void printLog(String message) {
-        System.out.println(String.format("[%s] [%s] %s", nodeId.toString(),
-                new java.text.SimpleDateFormat("HH:mm:ss.SSS").format(new java.util.Date()), message));
-    }
-
-    // Metode shutdown untuk penghentian yang bersih
+    // ====== Node Shutdown ======
     public void shutdown() {
         running = false;
-        if (scheduler != null) {
+        if (scheduler != null && !scheduler.isShutdown()) {
             scheduler.shutdown();
             try {
-                if (!scheduler.awaitTermination(1, TimeUnit.SECONDS)) {
+                if (!scheduler.awaitTermination(5, TimeUnit.SECONDS)) {
                     scheduler.shutdownNow();
                 }
             } catch (InterruptedException e) {
                 scheduler.shutdownNow();
-                Thread.currentThread().interrupt(); // Restore interrupt status
+                Thread.currentThread().interrupt();
             }
         }
-        if (rpcScheduler != null) {
-            rpcScheduler.shutdown();
-            try {
-                if (!rpcScheduler.awaitTermination(1, TimeUnit.SECONDS)) {
-                    rpcScheduler.shutdownNow();
-                }
-            } catch (InterruptedException e) {
-                rpcScheduler.shutdownNow();
-                Thread.currentThread().interrupt(); // Restore interrupt status
-            }
-        }
-        printLog("Node " + nodeId + " shutting down.");
+        System.out.println("[" + nodeId + "] RaftNode shutdown.");
     }
+
+
+
 }
+
