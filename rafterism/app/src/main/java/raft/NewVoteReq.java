@@ -1,5 +1,4 @@
-package rafterism.rafter;
-import java.util.List;
+package raft;
 
 
 public class NewVoteReq {

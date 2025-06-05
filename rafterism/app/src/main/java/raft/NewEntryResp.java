@@ -1,4 +1,4 @@
-package rafterism.rafter;
+package raft;
 
 public class NewEntryResp {
     private int term;

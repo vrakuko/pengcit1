@@ -1,4 +1,4 @@
-package rafterism.rafter;
+package raft;
 
 import java.util.List;
 

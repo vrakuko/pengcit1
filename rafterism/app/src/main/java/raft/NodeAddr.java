@@ -1,4 +1,4 @@
-package rafterism.rafter;
+package raft;
 
 public class NodeAddr {
     private String host;
