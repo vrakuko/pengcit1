@@ -44,4 +44,25 @@ public class KVStore{
         kvStore.put(key, current + value);
         System.out.println("OK");
     }
+
+    public String executeCommand(String commandType, String key, String value) {
+        switch (commandType.toLowerCase()) {
+            case "set":
+                set(key, value);
+                return "OK";
+            case "append":
+                append(key, value);
+                return "OK";
+            case "del":
+                return del(key); // Returns deleted value
+            case "get":
+                return get(key); // Returns value
+            case "strlen":
+                return String.valueOf(strLen(key)); // Returns length as string
+            case "ping":
+                return ping(); // Returns "PONG"
+            default:
+                return "ERROR: Unknown command";
+        }
+    }
 }
