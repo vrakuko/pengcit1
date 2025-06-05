@@ -1,5 +1,4 @@
 package raft.entity;
-
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
