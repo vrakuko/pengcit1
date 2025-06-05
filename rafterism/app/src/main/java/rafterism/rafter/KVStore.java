@@ -137,4 +137,25 @@ public class KVStore {
                ", data=" + kvStore +
                '}';
     }
+
+    public String executeCommand(String commandType, String key, String value) {
+        switch (commandType.toLowerCase()) {
+            case "set":
+                set(key, value);
+                return "OK";
+            case "append":
+                append(key, value);
+                return "OK";
+            case "del":
+                return del(key);
+            case "get":
+                return get(key);
+            case "strlen":
+                return String.valueOf(strLen(key));
+            case "ping":
+                return ping();
+            default:
+                return "ERROR: Unknown command";
+        }
+    }
 }

@@ -12,8 +12,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import raft.msg.*;
-import raft.server.*;
+
 
 
 public class RaftNode {
@@ -24,19 +23,19 @@ public class RaftNode {
     }
 
     // ====== Node Identity ======
-    private final Alamat nodeId; // bisa IP:PORT atau ID unik
-    private final List<Alamat> clusterNodes;
+    private final NodeAddr nodeId; // bisa IP:PORT atau ID unik
+    private final List<NodeAddr> clusterNodes;
 
     // ====== Raft Core State (Persistent) ======
     private int currentTerm ;
-    private Alamat votedFor ;
+    private NodeAddr votedFor ;
     private  List<Entry> log ;
 
     private int commitIndex ;
     private int lastApplied ;
 
     private Role role ;
-    private Alamat currentLeader ;
+    private NodeAddr currentLeader ;
 
     // ====== Timing ======
     private long lastHeartbeatTime;
@@ -45,8 +44,8 @@ public class RaftNode {
     
 
     // ====== Leader State (Volatile) ======
-    private Map<Alamat, Integer> nextIndex = new ConcurrentHashMap<>();
-    private Map<Alamat, Integer> matchIndex = new ConcurrentHashMap<>();
+    private Map<NodeAddr, Integer> nextIndex = new ConcurrentHashMap<>();
+    private Map<NodeAddr, Integer> matchIndex = new ConcurrentHashMap<>();
 
     // ====== Application Layer ======
     private  KVStore kvStore ;
@@ -60,7 +59,7 @@ public class RaftNode {
     private ScheduledExecutorService scheduler;
 
     // ====== Constructor ======
-    public RaftNode(Alamat nodeId, List<Alamat> initialClusterNodes) {
+    public RaftNode(NodeAddr nodeId, List<NodeAddr> initialClusterNodes) {
         this.nodeId = nodeId;
         this.clusterNodes  = new ArrayList<>(initialClusterNodes);
         this.currentTerm = 0;
@@ -83,7 +82,7 @@ public class RaftNode {
         startRaftLifecycle();
     }
 
-    public RaftNode(Alamat nodeId, List<Alamat> clusterNodes, int currentTerm, Role role, Alamat votedFor, List<Entry> initialLog, int commitIdx, int  lastApplied, Alamat currentLeader) {
+    public RaftNode(NodeAddr nodeId, List<NodeAddr> clusterNodes, int currentTerm, Role role, NodeAddr votedFor, List<Entry> initialLog, int commitIdx, int  lastApplied, NodeAddr currentLeader) {
         this(nodeId, clusterNodes);
         synchronized (stateLock) {
             this.currentTerm = currentTerm;
@@ -103,7 +102,7 @@ public class RaftNode {
 
     private void initializeLeaderState(){
         int lastLogIdx = log.size()-1; // Bisa juga log.size() - 1 tergantung implementasi
-            for (Alamat peer : clusterNodes) {
+            for (NodeAddr peer : clusterNodes) {
                 if (!peer.equals(this.nodeId)) {
                     nextIndex.put(peer, lastLogIdx);
                     matchIndex.put(peer, -1);
@@ -146,7 +145,7 @@ public class RaftNode {
         return currentTerm;
     }
 
-    public Alamat getVotedFor() {
+    public NodeAddr getVotedFor() {
         return votedFor;
     }
 
@@ -154,11 +153,11 @@ public class RaftNode {
         return role;
     }
 
-    public Alamat getNodeAdr() {
+    public NodeAddr getNodeAdr() {
         return nodeId;
     }
 
-    public Alamat getCurrentLeader() {
+    public NodeAddr getCurrentLeader() {
         return currentLeader;
     }
 
@@ -238,7 +237,7 @@ public class RaftNode {
                     // N < 0 or N >= log.size() check for safety although loop condition N > commitIndex should handle N>=0
                     continue;
                 }
-                for (Alamat peer : clusterNodes) {
+                for (NodeAddr peer : clusterNodes) {
                     if (peer.equals(nodeId)) {
                         replicatedCount++; // Leader's own log is always replicated
                     } else {
@@ -259,7 +258,7 @@ public class RaftNode {
 
     // Update Role
 
-     private void becomeFollower(int newTerm, Alamat newLeader) {
+     private void becomeFollower(int newTerm, NodeAddr newLeader) {
         System.out.println("[" + nodeId + "] Becoming FOLLOWER. Term: " + newTerm + ", Leader: " + newLeader);
         this.role = Role.FOLLOWER;
         this.currentTerm = newTerm;
@@ -309,9 +308,9 @@ public class RaftNode {
 
         // concurrent RPC calls
         Executors.newCachedThreadPool().submit(() -> {
-                for (Alamat peer : clusterNodes) {
+                for (NodeAddr peer : clusterNodes) {
                     if (!peer.equals(nodeId)) {
-                        final Alamat currentPeer = peer; // For use in lambda
+                        final NodeAddr currentPeer = peer; // For use in lambda
                         // Use a new thread for each RPC to avoid blocking the main Raft lifecycle thread
                         // This thread should be managed better in a real setup (e.g., dedicated pool for RPCs)
                         new Thread(() -> {
@@ -320,7 +319,7 @@ public class RaftNode {
 
                             try {
                                 System.out.println("[" + nodeId + "] Requesting vote from " + currentPeer + " for Term " + currentTerm);
-                                VoteResp response = rpcClient.requestVote(voteRequest);
+                                NewVoteResp response = rpcClient.requestVote(voteRequest);
 
                                 synchronized (stateLock) {
                                     // If term T > currentTerm: set currentTerm = T. convert to follower
@@ -353,14 +352,14 @@ public class RaftNode {
     }
     }
 
-    public VoteResp requestVote(VoteReq request) {
+    public NewVoteResp requestVote(VoteReq request) {
         synchronized (stateLock) {
             System.out.println("[" + nodeId + "] Received RequestVote from " + request.getFrom() + " for Term " + request.getTerm());
 
             // Reply false if term < currentTerm
             if (request.getTerm() < currentTerm) {
                 System.out.println("[" + nodeId + "] Denying vote: Request term " + request.getTerm() + " < current term " + currentTerm);
-                return new VoteResp(currentTerm, false, nodeId, request.getFrom());
+                return new NewVoteResp(currentTerm, false, nodeId, request.getFrom());
             }
 
             // If term T > currentTerm: set currentTerm = T. convert to follower
@@ -378,10 +377,10 @@ public class RaftNode {
                 votedFor = request.getCandidateId(); // Grant vote
                 System.out.println("[" + nodeId + "] Granting vote to " + request.getCandidateId() + " for Term " + currentTerm);
                 resetHeartbeatTimer(); 
-                return new VoteResp(currentTerm, true, nodeId, request.getFrom());
+                return new NewVoteResp(currentTerm, true, nodeId, request.getFrom());
             } else {
                 System.out.println("[" + nodeId + "] Denying vote for " + request.getCandidateId() + ". Reason: votedFor=" + votedFor + ", logUpToDate=" + isLogUpToDate);
-                return new VoteResp(currentTerm, false, nodeId, request.getFrom());
+                return new NewVoteResp(currentTerm, false, nodeId, request.getFrom());
             }
         }
     }
@@ -470,9 +469,9 @@ public class RaftNode {
 
             // For each follower, send AppendEntries RPC
             Executors.newCachedThreadPool().submit(() -> {
-                for (Alamat peer : clusterNodes) {
+                for (NodeAddr peer : clusterNodes) {
                     if (!peer.equals(nodeId)) {
-                        final Alamat currentPeer = peer;
+                        final NodeAddr currentPeer = peer;
                         // Use a new thread for each RPC to avoid blocking.
                         // For production, consider using a fixed thread pool or CompletableFuture for better management.
                         new Thread(() -> {
