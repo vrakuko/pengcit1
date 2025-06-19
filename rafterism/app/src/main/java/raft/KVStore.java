@@ -10,55 +10,49 @@ public class KVStore {
         this.kvStore = new HashMap<>();
     }
 
-    public String ping() { // Mengembalikan String
+    public String ping() {
         return "PONG";
     }
 
-    public String get(String key) { // Mengembalikan String
+    public String get(String key) {
         return kvStore.getOrDefault(key, "");
     }
 
-    public String set(String key, String value) { // Mengembalikan String
-        kvStore.put(key, value);
-        // Berdasarkan spesifikasi, SET mengembalikan "OK"
-        // Jika di spesifikasi tugas Anda, set hanya print "OK" dan tidak mengembalikan apa-apa,
-        // maka executeCommand tidak bisa mengembalikan hasil dari set.
+    public String set(String key, String value){
+    kvStore.put(key, value);
+    return "OK";
+}
+
+    public String append(String key, String value) {
+        kvStore.compute(key, (k, v) -> (v == null ? "" : v) + value);
         return "OK";
     }
 
-    public int strLen(String key) { // Mengembalikan int
+    public int strLen(String key) {
         return get(key).length();
     }
 
-    public String del(String key) { // Mengembalikan String
+    public String del(String key) {
         String oldValue = kvStore.getOrDefault(key, "");
         kvStore.remove(key);
         return oldValue;
     }
 
-    public String append(String key, String value) { // Mengembalikan String
-        String current = get(key);
-        kvStore.put(key, current + value);
-        // Berdasarkan spesifikasi, APPEND mengembalikan "OK"
-        return "OK";
-    }
-
-    // Metode ini HARUS mengembalikan String jika digunakan seperti di RaftNode
     public String executeCommand(String commandType, String key, String value) {
         if (commandType == null) return "ERROR: CommandType is null";
         switch (commandType.toLowerCase()) {
             case "set":
-                return set(key, value); // set() mengembalikan String
+                return set(key, value);
             case "append":
-                return append(key, value); // append() mengembalikan String
+                return append(key, value);
             case "del":
-                return del(key); // del() mengembalikan String
+                return del(key);
             case "get":
-                return get(key); // get() mengembalikan String
+                return get(key);
             case "strlen":
-                return String.valueOf(strLen(key)); // strLen() mengembalikan int, dikonversi ke String
+                return String.valueOf(strLen(key));
             case "ping":
-                return ping(); // ping() mengembalikan String
+                return ping();
             default:
                 System.err.println("[" + Thread.currentThread().getName() + "] Unknown command in KVStore: " + commandType);
                 return "ERROR: Unknown command '" + commandType + "'";

@@ -1,4 +1,5 @@
 package raft;
+import raft.proto.AddressMsg;
 
 public class NodeAddr {
     private String host;
@@ -30,6 +31,16 @@ public class NodeAddr {
         this.port = port;
     }
 
+    public AddressMsg toMsg() {
+        return AddressMsg.newBuilder()
+            .setHost(this.host)
+            .setPort(this.port)
+            .build();
+    }
+
+    public static NodeAddr fromMsg(AddressMsg msg) {
+        return new NodeAddr(msg.getHost(), msg.getPort());
+    }
 
     @Override
     public String toString() {
