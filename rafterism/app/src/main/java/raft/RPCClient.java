@@ -1,34 +1,42 @@
 package raft;
 
+import java.util.concurrent.TimeUnit;
+
+import io.grpc.ManagedChannel;
+import io.grpc.ManagedChannelBuilder;
+import io.grpc.StatusRuntimeException;
+import raft.proto.AppendEntriesRequest;
+import raft.proto.AppendEntriesResponse;
+import raft.proto.RaftServiceGrpc;
+import raft.proto.VoteRequest;
+import raft.proto.VoteResponse;
+
 public class RPCClient {
-    private final NodeAddr targetNode;
-
-    public RPCClient(NodeAddr targetNode) {
-        this.targetNode = targetNode;
-    }
-
-    public NewVoteResp requestVote(NewVoteReq request) throws Exception {
-        // This is a dummy implementation. In a real gRPC setup,
-        // you would use a gRPC stub here.
-        System.out.println("[RPCClient] Simulating RequestVote to " + targetNode + " from " + request.getFrom() + " for Term " + request.getTerm());
-        // Simulate a successful vote for now, or a denial if the term is higher
-        if (request.getTerm() == 1) { // Simple condition for dummy
-             return new NewVoteResp(request.getTerm(), true, targetNode, request.getFrom());
-        } else {
-             return new NewVoteResp(request.getTerm(), false, targetNode, request.getFrom());
+    public static VoteResponse sendVoteRequest(NodeAddr target, VoteRequest request) throws StatusRuntimeException {
+        ManagedChannel channel = ManagedChannelBuilder.forAddress(target.getHost(), target.getPort())
+            .usePlaintext()
+            .build();
+        
+        try {
+            RaftServiceGrpc.RaftServiceBlockingStub stub = RaftServiceGrpc.newBlockingStub(channel);
+            return stub.withDeadlineAfter(500, TimeUnit.MILLISECONDS).requestVote(request);
+        } finally {
+            channel.shutdownNow();
         }
-        // In a real scenario:
-        // YourGrpcServiceStub stub = YourGrpcServiceStub.newBlockingStub(channel);
-        // return stub.requestVote(request);
     }
 
-    public NewEntryResp appendEntries(NewEntryReq request) throws Exception {
-        // This is a dummy implementation for heartbeats.
-        System.out.println("[RPCClient] Simulating AppendEntries (Heartbeat: " + request.getEntries().isEmpty() + ") to " + targetNode + " from " + request.getFrom() + " for Term " + request.getTerm());
-        // Simulate success for now
-        return new NewEntryResp(request.getTerm(), true, targetNode, request.getFrom());
-        // In a real scenario:
-        // YourGrpcServiceStub stub = YourGrpcServiceStub.newBlockingStub(channel);
-        // return stub.appendEntries(request);
+    public static AppendEntriesResponse sendAppendEntries(NodeAddr target, AppendEntriesRequest request) throws StatusRuntimeException {
+        ManagedChannel channel = ManagedChannelBuilder.forAddress(target.getHost(), target.getPort())
+            .usePlaintext()
+            .build();
+            
+        try {
+            RaftServiceGrpc.RaftServiceBlockingStub stub = RaftServiceGrpc.newBlockingStub(channel);
+
+            long timeout = request.getEntriesCount() > 0 ? 500 : 100;
+            return stub.withDeadlineAfter(timeout, TimeUnit.MILLISECONDS).appendEntries(request);
+        } finally {
+            channel.shutdownNow();
+        }
     }
 }
