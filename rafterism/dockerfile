@@ -1,0 +1,12 @@
+# Gunakan base image Java 17 yang resmi dan ringan
+FROM eclipse-temurin:17-jdk-jammy
+
+# Tetapkan direktori kerja di dalam container
+WORKDIR /app
+
+# Salin hasil build Gradle ke dalam container
+# Kita menyalin hasil dari `installDist` yang sudah berisi semua dependensi
+COPY app/build/install/app/ .
+
+# Tetapkan perintah yang akan dijalankan saat container dimulai
+ENTRYPOINT ["bin/app"]
