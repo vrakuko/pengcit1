@@ -43,9 +43,9 @@ public class RaftNode {
     // ====== Timing ======
     private volatile long lastHeartbeatTime;
     private final long electionTimeout;
-    private static final long HEARTBEAT_INTERVAL_MS = 150;
-    private static final long ELECTION_TIMEOUT_MIN_MS = 300;
-    private static final long ELECTION_TIMEOUT_MAX_MS = 500;
+    private static final long HEARTBEAT_INTERVAL_MS = 50;
+    private static final long ELECTION_TIMEOUT_MIN_MS = 150;
+    private static final long ELECTION_TIMEOUT_MAX_MS = 300;
 
     // ====== Leader State (Volatile) ======
     private final Map<NodeAddr, Integer> nextIndex = new ConcurrentHashMap<>();

@@ -4,9 +4,18 @@ package raft;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
+import java.util.stream.Collectors; 
 
 public class App {
     public static void main(String[] args) throws IOException, InterruptedException {
+        try {
+            System.out.println("Waiting 5 seconds for the cluster network to stabilize..."); // delay untuk startup
+            Thread.sleep(5000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            System.err.println("Startup delay was interrupted. Exiting.");
+            return;
+        }
         if (args.length < 2) {
             System.out.println("Usage: java -jar app.jar <node-id> <cluster-string>");
             System.out.println("Example: java -jar app.jar 0 localhost:8001,localhost:8002,localhost:8003");
@@ -17,7 +26,7 @@ public class App {
         String[] clusterAddrs = args[1].split(",");
         
         NodeAddr selfAddr = parseAddr(clusterAddrs[nodeId]);
-        List<NodeAddr> cluster = Arrays.stream(clusterAddrs).map(App::parseAddr).toList();
+        List<NodeAddr> cluster = Arrays.stream(clusterAddrs).map(App::parseAddr).collect(Collectors.toList());
 
         System.out.println("Starting Node " + selfAddr + " as part of cluster: " + cluster);
 
