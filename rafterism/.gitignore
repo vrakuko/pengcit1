@@ -1,5 +1,10 @@
-# Ignore Gradle project-specific cache directory
-.gradle
+# macOS
+.DS_Store
 
-# Ignore Gradle build output directory
-build
+# Gradle
+.gradle/
+build/
+
+# IDE
+.idea/
+*.iml
