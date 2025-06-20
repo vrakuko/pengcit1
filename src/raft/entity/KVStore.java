@@ -1,32 +1,25 @@
 package raft.entity;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
-import java.util.HashMap;
-import java.util.Map;
-
-public class KVStore{
-
-    
-    private   Map<String, String> kvStore;
-    // public CommandType cmd ; 
+public class KVStore {
+    private final ConcurrentMap<String, String> kvStore;
     
     public KVStore() {
-        // this.cmd = null;
-        this.kvStore = new HashMap<>();
+        this.kvStore = new ConcurrentHashMap<>();
     }
-
-
     
     public String ping() {
         return "PONG";
     }
     
     public String get(String key) {
-        return kvStore.getOrDefault(key, "");
+        return kvStore.getOrDefault(key,"");
     }
     
-    public void set(String key, String value) {
+    public String set(String key, String value){
         kvStore.put(key, value);
-       System.out.println("OK");
+        return "OK";
     }
     
     public int strLen(String key) {
@@ -34,12 +27,11 @@ public class KVStore{
     }
     
     public String del(String key) {
-        String value = get(key);
-        kvStore.remove(key);
-        return value; 
+        String value = kvStore.remove(key);
+        return value != null ? value : "";
     }
     
-    public void append(String key, String value) {
+    public String append(String key, String value) {
         String current = get(key);
         kvStore.put(key, current + value);
         System.out.println("OK");

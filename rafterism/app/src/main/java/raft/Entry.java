@@ -1,4 +1,5 @@
-package rafterism.rafter;
+package raft;
+import raft.proto.LogEntryMsg;
 
 public class Entry {
     private int term;
@@ -26,9 +27,23 @@ public class Entry {
     public String getValue() { return value; }
     // public long getTimestamp() { return timestamp; }
 
+    public LogEntryMsg toMsg() {
+        LogEntryMsg.Builder builder = LogEntryMsg.newBuilder()
+            .setTerm(this.term)
+            .setCommand(this.command);
+        
+        if (this.key != null) builder.setKey(this.key);
+        if (this.value != null) builder.setValue(this.value);
+
+        return builder.build();
+    }
+
+    public static Entry fromMsg(LogEntryMsg msg) {
+        return new Entry(msg.getTerm(), msg.getCommand(), msg.getKey(), msg.getValue());
+    }
+
     @Override
     public String toString() {
-        return String.format("LogEntry{term=%d, cmd=%s, key=%s, value=%s}",
-                           term, command, key, value);
+        return String.format("LogEntry{term=%d, cmd=%s, key=%s, value=%s}", term, command,key, value);
     }
 }
