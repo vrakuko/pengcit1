@@ -67,26 +67,31 @@ docker network create raft-net
 
 ### Langkah 3: Jalankan Cluster Raft
 
-Kita akan menjalankan cluster yang terdiri dari 3 node. Setiap node akan berjalan sebagai container Docker yang terpisah. Buka satu terminal dan jalankan ketiga perintah berikut secara berurutan.
+Kita akan menjalankan cluster yang terdiri dari 4 node. Setiap node akan berjalan sebagai container Docker yang terpisah. Buka satu terminal dan jalankan ketiga perintah berikut secara berurutan.
 
 *   **Jalankan Node 1:**
     ```bash
-    docker run -d --rm --network raft-net --name raft-node-1 -p 9001:9001 raft-app 0 raft-node-1:8001,raft-node-2:8002,raft-node-3:8003
+    docker run -d --rm --network raft-net --name raft-node-1 -p 9001:9001 raft-app 0 raft-node-1:8001,raft-node-2:8002,raft-node-3:8003,raft-node-4:8004
     ```
 *   **Jalankan Node 2:**
     ```bash
-    docker run -d --rm --network raft-net --name raft-node-2 -p 9002:9002 raft-app 1 raft-node-1:8001,raft-node-2:8002,raft-node-3:8003
+    docker run -d --rm --network raft-net --name raft-node-2 -p 9002:9002 raft-app 1 raft-node-1:8001,raft-node-2:8002,raft-node-3:8003,raft-node-4:8004
     ```
 *   **Jalankan Node 3:**
     ```bash
-    docker run -d --rm --network raft-net --name raft-node-3 -p 9003:9003 raft-app 2 raft-node-1:8001,raft-node-2:8002,raft-node-3:8003
+    docker run -d --rm --network raft-net --name raft-node-3 -p 9003:9003 raft-app 2 raft-node-1:8001,raft-node-2:8002,raft-node-3:8003,raft-node-4:8004
     ```
+*   **Jalankan Node 4:**
+    ```bash
+    docker run -d --rm --network raft-net --name raft-node-4 -p 9004:9004 raft-app 2 raft-node-1:8001,raft-node-2:8002,raft-node-3:8003,raft-node-4:8004
+    ```
+
 
 Untuk memeriksa apakah semua container berjalan dengan benar, gunakan perintah:
 ```bash
 docker ps
 ```
-Anda seharusnya melihat `raft-node-1`, `raft-node-2`, dan `raft-node-3` dalam daftar.
+Anda seharusnya melihat `raft-node-1`, `raft-node-2`, `raft-node-3`, dan `raft-node-4` dalam daftar.
 
 ### Langkah 4: Amati Proses Leader Election
 
@@ -104,6 +109,11 @@ Anda dapat melihat log dari setiap node untuk mengamati proses pemilihan leader 
     ```bash
     docker logs -f raft-node-3
     ```
+*   **Lihat Log Node 4:**
+    ```bash
+    docker logs -f raft-node-4
+    ```
+
 Tunggu beberapa saat, dan Anda akan melihat salah satu node mencetak log bahwa ia telah menjadi `LEADER`.
 
 ### Langkah 5: Jalankan Klien CLI
@@ -116,11 +126,11 @@ Setelah cluster stabil dan memiliki Leader, Anda dapat berinteraksi dengannya me
 
     *   **Untuk macOS/Linux:**
         ```bash
-        java -cp "app/build/classes/java/main:app/build/resources/main:app/build/install/app/lib/*" raft.RaftCLI localhost:9001,localhost:9002,localhost:9003
+        java -cp "app/build/classes/java/main:app/build/resources/main:app/build/install/app/lib/*" raft.RaftCLI localhost:9001,localhost:9002,localhost:9003,localhost:9004
         ```
     *   **Untuk Windows:**
         ```powershell
-        java -cp "app/build/classes/java/main;app/build/resources/main;app/build/install/app/lib/*" raft.RaftCLI localhost:9001,localhost:9002,localhost:9003
+        java -cp "app/build/classes/java/main;app/build/resources/main;app/build/install/app/lib/*" raft.RaftCLI localhost:9001,localhost:9002,localhost:9003,localhost:9004
         ```
 4.  Klien sekarang siap menerima perintah seperti `set`, `get`, `append`, `del`, `strln`, dan `ping`.
 
@@ -128,7 +138,7 @@ Setelah cluster stabil dan memiliki Leader, Anda dapat berinteraksi dengannya me
 
 Jika sudah selesai, Anda dapat menghentikan dan menghapus semua container dengan perintah berikut:
 ```bash
-docker stop raft-node-1 raft-node-2 raft-node-3
+docker stop raft-node-1 raft-node-2 raft-node-3 raft-node-4
 ```
 Karena kita menggunakan flag `--rm` saat menjalankan, container akan otomatis terhapus setelah dihentikan. Anda juga bisa menghapus jaringan virtual jika tidak lagi dibutuhkan:
 ```bash
