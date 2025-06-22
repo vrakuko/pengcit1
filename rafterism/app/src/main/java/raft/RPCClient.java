@@ -19,7 +19,7 @@ public class RPCClient {
         
         try {
             RaftServiceGrpc.RaftServiceBlockingStub stub = RaftServiceGrpc.newBlockingStub(channel);
-            return stub.withDeadlineAfter(500, TimeUnit.MILLISECONDS).requestVote(request);
+            return stub.withDeadlineAfter(2000, TimeUnit.MILLISECONDS).requestVote(request);
         } finally {
             channel.shutdownNow();
         }
@@ -33,8 +33,8 @@ public class RPCClient {
         try {
             RaftServiceGrpc.RaftServiceBlockingStub stub = RaftServiceGrpc.newBlockingStub(channel);
 
-            long timeout = request.getEntriesCount() > 0 ? 500 : 100;
-            return stub.withDeadlineAfter(timeout, TimeUnit.MILLISECONDS).appendEntries(request);
+            // long timeout = request.getEntriesCount() > 0 ? 500 : 100;
+            return stub.withDeadlineAfter(2000, TimeUnit.MILLISECONDS).appendEntries(request);
         } finally {
             channel.shutdownNow();
         }

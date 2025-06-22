@@ -19,9 +19,9 @@ public class KVStore {
     }
 
     public String set(String key, String value){
-    kvStore.put(key, value);
-    return "OK";
-}
+        kvStore.put(key, value);
+        return "OK";
+    }
 
     public String append(String key, String value) {
         kvStore.compute(key, (k, v) -> (v == null ? "" : v) + value);

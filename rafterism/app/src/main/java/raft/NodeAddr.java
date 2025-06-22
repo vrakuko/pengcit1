@@ -42,6 +42,14 @@ public class NodeAddr {
         return new NodeAddr(msg.getHost(), msg.getPort());
     }
 
+    public static NodeAddr fromString(String addrStr) {
+        String[] parts = addrStr.split(":");
+        if (parts.length != 2) {
+            throw new IllegalArgumentException("Invalid address format. Expected 'host:port', got '" + addrStr + "'");
+        }
+        return new NodeAddr(parts[0], Integer.parseInt(parts[1]));
+    }
+
     @Override
     public String toString() {
         return host + ":" + port;
