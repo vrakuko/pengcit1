@@ -6,6 +6,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.Scanner;
 
 import com.google.gson.Gson;
@@ -34,24 +35,45 @@ public class RaftCLI {
             return;
         }
         clusterClientEndpoints = args[0].split(",");
-        currentTargetEndpoint = clusterClientEndpoints[0]; // mulai dari node pertama
+        currentTargetEndpoint = clusterClientEndpoints[0];
         System.out.println("Raft KVStore CLI");
         System.out.println("Initial target node: " + currentTargetEndpoint);
         System.out.println("Enter 'exit' to quit.");
 
         Scanner scanner = new Scanner(System.in);
         while (true) {
-            System.out.print("> ");
+            System.out.print("[" + currentTargetEndpoint + "]> "); 
             String line = scanner.nextLine();
             if (line.equalsIgnoreCase("exit")) break;
             if (line.trim().isEmpty()) continue;
+
+            String[] parts = line.trim().split("\\s+");
+            if (parts[0].equalsIgnoreCase("target") && parts.length == 2) {
+                String newTarget = parts[1];
+                boolean isValidTarget = false;
+                for(String endpoint : clusterClientEndpoints) {
+                    if (endpoint.equals(newTarget)) {
+                        isValidTarget = true;
+                        break;
+                    }
+                }
+                if (newTarget.matches("localhost:\\d{4}")) { 
+                    isValidTarget = true;
+                }
+
+                if(isValidTarget) {
+                    currentTargetEndpoint = newTarget;
+                    System.out.println("--> Target switched to " + currentTargetEndpoint);
+                } else {
+                    System.out.println("ERROR: Invalid target. Please use one of: " + Arrays.toString(clusterClientEndpoints));
+                }
+                continue;
+            }
 
             try {
                 processCommand(line);
             } catch (Exception e) {
                 System.err.println("Error: Could not connect to target node " + currentTargetEndpoint + ". Trying another node...");
-                // kalau koneksi gagal coba node lain
-                switchToNextEndpoint();
             }
         }
         scanner.close();
@@ -61,10 +83,16 @@ public class RaftCLI {
     private static void processCommand(String line) throws IOException, InterruptedException {
         String[] parts = line.trim().split("\\s+", 3);
         String command = parts[0].toLowerCase();
+        
+        if ((command.equals("add_node") || command.equals("remove_node")) && parts.length < 2) {
+             System.out.println("ERROR: Command '" + command + "' requires a node address (e.g., host:port).");
+             return;
+        }
+
         String key = parts.length > 1 ? parts[1] : null;
         String value = parts.length > 2 ? parts[2] : null;
 
-        if (key == null && !command.equals("ping")) {
+        if (key == null && !command.equals("ping") && !command.equals("request_log")) {
             System.out.println("ERROR: Command '" + command + "' requires a key.");
             return;
         }
@@ -80,7 +108,11 @@ public class RaftCLI {
             return;
         }
         
-        // Tampilkan hasil sesuai format soal
+        if (command.equals("request_log")) {
+            System.out.println(responseBody);
+            return;
+        }
+
         if (command.equals("get")) {
             System.out.println("\"" + responseBody + "\"");
         } else if (command.equals("strln")) {
@@ -95,30 +127,39 @@ public class RaftCLI {
     private static String sendRequest(String command, String key, String value) throws IOException, InterruptedException {
         HttpRequest request;
         
-        for (int i = 0; i < clusterClientEndpoints.length + 1; i++) {
-            if (command.equals("get") || command.equals("strln") || command.equals("ping")) {
-                String path = command.equals("ping") ? "/ping" : "/" + key;
-                request = HttpRequest.newBuilder().uri(URI.create("http://" + currentTargetEndpoint + path)).GET().build();
-            } else {
-                CommandPayload payload = new CommandPayload(command, key, value);
-                String requestBody = gson.toJson(payload);
-                request = HttpRequest.newBuilder()
-                        .uri(URI.create("http://" + currentTargetEndpoint + "/command"))
+        for (int i = 0; i < clusterClientEndpoints.length + 2; i++) {
+            String path;
+            if (command.equals("get") || command.equals("strln")) path = "/" + key;
+            else if (command.equals("ping")) path = "/ping";
+            else if (command.equals("request_log")) path = "/log";
+            else path = "/command"; 
+
+            if (path.equals("/command")) {
+                 CommandPayload payload = new CommandPayload(command, key, value);
+                 String requestBody = gson.toJson(payload);
+                 request = HttpRequest.newBuilder()
+                        .uri(URI.create("http://" + currentTargetEndpoint + path))
                         .header("Content-Type", "application/json")
                         .POST(HttpRequest.BodyPublishers.ofString(requestBody))
                         .build();
+            } else {
+                 request = HttpRequest.newBuilder().uri(URI.create("http://" + currentTargetEndpoint + path)).GET().build();
             }
             
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            String body = response.body();
-
-            if (body.startsWith("REDIRECT:")) {
-                String newLeaderAddr = body.substring(9);
-                System.out.println("--> Redirected to leader at " + newLeaderAddr);
-                currentTargetEndpoint = newLeaderAddr;
-                continue;
+            try {
+                HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+                String body = response.body();
+                if (body.startsWith("REDIRECT:")) {
+                    String newLeaderAddr = body.substring(9);
+                    System.out.println("--> Redirected to leader at " + newLeaderAddr);
+                    currentTargetEndpoint = newLeaderAddr;
+                    continue;
+                }
+                return body;
+            } catch (IOException e) {
+                System.err.println("Error connecting to " + currentTargetEndpoint + ": " + e.getMessage());
+                switchToNextEndpoint();
             }
-            return body;
         }
         return null;
     }

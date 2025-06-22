@@ -43,9 +43,9 @@ public class RaftNode {
     // ====== Timing ======
     private volatile long lastHeartbeatTime;
     private final long electionTimeout;
-    private static final long HEARTBEAT_INTERVAL_MS = 50;
-    private static final long ELECTION_TIMEOUT_MIN_MS = 150;
-    private static final long ELECTION_TIMEOUT_MAX_MS = 300;
+    private static final long HEARTBEAT_INTERVAL_MS = 1000;
+    private static final long ELECTION_TIMEOUT_MIN_MS = 5000;
+    private static final long ELECTION_TIMEOUT_MAX_MS = 8000;
 
     // ====== Leader State (Volatile) ======
     private final Map<NodeAddr, Integer> nextIndex = new ConcurrentHashMap<>();
@@ -100,8 +100,11 @@ public class RaftNode {
                 }
                 break;
             case LEADER:
-                // leader kirim heartbeat periodik
-                sendAppendEntriesToFollowers(true); // kirim heartbeat
+                if (System.currentTimeMillis() - lastHeartbeatTime >= HEARTBEAT_INTERVAL_MS) {
+                    // System.out.println("[" + nodeId + "][Term " + currentTerm + "] Sending heartbeat..."); //  log untuk debug
+                    sendAppendEntriesToFollowers(true);
+                    resetHeartbeatTimer();
+                }
                 break;
         }
     }
@@ -167,7 +170,7 @@ public class RaftNode {
         for (NodeAddr peer : clusterNodes) {
             if (!peer.equals(nodeId)) {
                 VoteRequest request = requestBuilder.setToNodeId(peer.toMsg()).build();
-                CompletableFuture.supplyAsync(() -> RPCClient.sendVoteRequest(peer, request), scheduler)
+                CompletableFuture.supplyAsync(() -> RPCWrapper.callRequestVote(peer, request), scheduler)
                     .thenAccept(response -> handleVoteResponse(response, electionTerm))
                     .exceptionally(ex -> {
                         System.err.println("[" + nodeId + "] Failed to send VoteRequest to " + peer + ": " + ex.getMessage());
@@ -201,13 +204,20 @@ public class RaftNode {
         for (NodeAddr peer : clusterNodes) {
             if (!peer.equals(nodeId)) {
                 int nextIdx = nextIndex.getOrDefault(peer, log.size());
-                
+
                 if (isHeartbeat || log.size() >= nextIdx) {
                     int prevLogIndex = nextIdx - 1;
                     int prevLogTerm = (prevLogIndex >= 0) ? log.get(prevLogIndex).getTerm() : 0;
-                    
+
                     List<Entry> entriesToSend = (log.size() > nextIdx) ?
                         log.subList(nextIdx, log.size()) : Collections.emptyList();
+
+                    if (isHeartbeat && entriesToSend.isEmpty()) {
+                        // System.out.println("[" + nodeId + "][Term " + currentTerm + "] Sending heartbeat to " + peer);
+                    } else if (!entriesToSend.isEmpty()) {
+                        System.out.println("[" + nodeId + "][Term " + currentTerm + "] Replicating " + entriesToSend.size() + " entries to " + peer + " (from index " + nextIdx + ")");
+                    }
+
 
                     AppendEntriesRequest request = AppendEntriesRequest.newBuilder()
                         .setTerm(currentTerm)
@@ -219,9 +229,10 @@ public class RaftNode {
                         .setToNodeId(peer.toMsg())
                         .build();
 
-                    CompletableFuture.supplyAsync(() -> RPCClient.sendAppendEntries(peer, request), scheduler)
+                    CompletableFuture.supplyAsync(() -> RPCWrapper.callAppendEntries(peer, request), scheduler)
                         .thenAccept(response -> handleAppendEntriesResponse(peer, request, response))
                         .exceptionally(ex -> {
+                            System.err.println("[" + nodeId + "][Term " + currentTerm + "] Failed to send AppendEntries to " + peer + ": " + ex.getMessage());
                             return null;
                         });
                 }
@@ -322,7 +333,16 @@ public class RaftNode {
 
     public CompletableFuture<String> handleClientRequest(String command, String key, String value) {
         synchronized (stateLock) {
+            if (role != Role.LEADER) {
+                CompletableFuture<String> future = new CompletableFuture<>();
+                future.complete("REDIRECT:" + (currentLeader != null ? currentLeader.toString() : "UNKNOWN"));
+                return future;
+            }
             
+            if (command.equals("add_node") || command.equals("remove_node")) {
+                System.out.println("[" + nodeId + "] Received membership change command: " + command + " " + key);
+            }
+
             Entry newEntry = new Entry(currentTerm, command, key, value);
             log.add(newEntry);
             int entryIndex = log.size() - 1;
@@ -330,9 +350,8 @@ public class RaftNode {
             CompletableFuture<String> future = new CompletableFuture<>();
             pendingRequests.put(entryIndex, future);
             
-            System.out.println("... Accepted request for index " + entryIndex);
-            sendAppendEntriesToFollowers(false);
-            
+            System.out.println("[" + nodeId + "] Accepted request for index " + entryIndex + ": " + newEntry);
+            sendAppendEntriesToFollowers(false); 
             return future;
         }
     }
@@ -345,14 +364,28 @@ public class RaftNode {
                 lastApplied++;
                 if (lastApplied < log.size()) {
                     Entry entry = log.get(lastApplied);
-                    String result = kvStore.executeCommand(entry.getCommand(), entry.getKey(), entry.getValue());
-                    
-                    if (pendingRequests.containsKey(lastApplied)) {
-                        CompletableFuture<String> future = pendingRequests.remove(lastApplied);
-                        future.complete(result);
+                    String result = "OK";
+                    String cmd = entry.getCommand();
+
+                    if (cmd.equals("add_node")) {
+                        NodeAddr newNode = NodeAddr.fromString(entry.getKey());
+                        if (!clusterNodes.contains(newNode)) {
+                            clusterNodes.add(newNode);
+                            System.out.println("[" + nodeId + "] Applied config change: ADDED node " + newNode);
+                        }
+                    } else if (cmd.equals("remove_node")) {
+                        NodeAddr oldNode = NodeAddr.fromString(entry.getKey());
+                        if (clusterNodes.remove(oldNode)) {
+                            System.out.println("[" + nodeId + "] Applied config change: REMOVED node " + oldNode);
+                        }
+                    } else {
+                        result = kvStore.executeCommand(cmd, entry.getKey(), entry.getValue());
                     }
-                    
-                    System.out.println("... Applied log[" + lastApplied + "]: " + entry + " -> " + result);
+
+                    if (pendingRequests.containsKey(lastApplied)) {
+                        pendingRequests.remove(lastApplied).complete(result);
+                    }
+                    System.out.println("[" + nodeId + "] Applied log[" + lastApplied + "]: " + entry + " -> " + result);
                 }
             }
         }
@@ -371,6 +404,7 @@ public class RaftNode {
                 if (matchCount > majority) {
                     commitIndex = N;
                     System.out.println("[" + nodeId + "][Term " + currentTerm + "] Commit index updated to " + commitIndex);
+                    applyCommittedEntries(); 
                     break;
                 }
             }
@@ -415,4 +449,9 @@ public class RaftNode {
     public NodeAddr getCurrentLeader() { return currentLeader; }
     public KVStore getKVStore() { return this.kvStore; }
     public boolean isLeader() { return this.role == Role.LEADER; }
+    public List<String> getLogForClient() {
+        synchronized(log) {
+            return log.stream().map(Entry::toString).collect(Collectors.toList());
+        }
+    }
 }

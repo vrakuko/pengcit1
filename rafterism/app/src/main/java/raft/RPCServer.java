@@ -1,4 +1,3 @@
-// Buat file baru di paket 'raft' (atau 'raft.server')
 package raft;
 
 import java.io.IOException;
