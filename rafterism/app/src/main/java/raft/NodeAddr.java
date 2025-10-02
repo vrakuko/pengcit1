@@ -1,0 +1,70 @@
+package raft;
+import raft.proto.AddressMsg;
+
+public class NodeAddr {
+    private String host;
+    private int port ;
+
+    public NodeAddr(){
+        this.host = null;
+        this.port = 0;
+    }
+
+    public NodeAddr(String host, int port){
+        this.host = host;
+        this.port = port;
+    }
+
+    public String getHost(){
+        return this.host;
+    }
+
+    public void setHost(String host){
+        this.host = host;
+    }
+
+    public int getPort(){
+        return this.port;
+    }
+
+    public void setPort(int port){
+        this.port = port;
+    }
+
+    public AddressMsg toMsg() {
+        return AddressMsg.newBuilder()
+            .setHost(this.host)
+            .setPort(this.port)
+            .build();
+    }
+
+    public static NodeAddr fromMsg(AddressMsg msg) {
+        return new NodeAddr(msg.getHost(), msg.getPort());
+    }
+
+    public static NodeAddr fromString(String addrStr) {
+        String[] parts = addrStr.split(":");
+        if (parts.length != 2) {
+            throw new IllegalArgumentException("Invalid address format. Expected 'host:port', got '" + addrStr + "'");
+        }
+        return new NodeAddr(parts[0], Integer.parseInt(parts[1]));
+    }
+
+    @Override
+    public String toString() {
+        return host + ":" + port;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (this == obj) return true;
+        if (obj == null || getClass() != obj.getClass()) return false;
+        NodeAddr that = (NodeAddr) obj; // Cast to nodeAddr
+        return this.port == that.port && this.host.equals(that.host);
+    }
+
+    @Override
+    public int hashCode() {
+        return java.util.Objects.hash(host, port);
+    }
+}

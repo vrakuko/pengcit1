@@ -1,0 +1,9 @@
+// rafterism/settings.gradle
+
+// Menentukan nama root project Anda.
+// Ini akan menjadi nama yang muncul di IDE Anda untuk proyek secara keseluruhan.
+rootProject.name = 'rafterism'
+
+// Menyatakan bahwa ada modul bernama 'app' di dalam proyek ini.
+// Gradle akan mencari file build.gradle di dalam folder 'app/'.
+include ':app'
